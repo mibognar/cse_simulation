@@ -1,0 +1,49 @@
+---
+title: "simulrt"
+author: "Miklos Bognar"
+date: "2024-02-09"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(tidyverse)
+library(papaja)
+subject_number = 200
+trials = 1:200
+tau_0 = rnorm(subject_number,0,100)
+subject_data = data.frame(subject_id = seq_len(subject_number), tau_0)
+trial_df = expand.grid(subject_id = subject_data$subject_id, trial_id = trials)
+
+raw_data = trial_df %>% 
+  left_join(subject_data, by="subject_id") %>% 
+  mutate(congruent = sample(c(0,1),size=n(), replace=T),
+         prev_congruent = sample(c(0,1),size=n(), replace=T),
+         beta_0 = rexgaussian(n=n(), mu=700, sigma=100, beta = 180),
+         beta_1 = rnorm(n=n(), mean=50, sd = 10),
+         beta_2 = rnorm(n=n(), mean=25, sd = 5)) %>% 
+  mutate(RT = tau_0 +
+           beta_0+
+           ifelse(congruent,beta_1*-.5,beta_1*.5)+
+           ifelse(prev_congruent,0,ifelse(congruent,beta_2*.5,beta_2*-.5)))
+
+summary = raw_data %>% 
+  group_by(congruent,prev_congruent) %>% 
+  summarize(mean_rt = mean(RT),
+            sd_rt = sd(RT))
+
+raw_data %>% 
+  ggplot()+
+  aes(x=RT) +
+  papaja::theme_apa() +
+  geom_histogram(bins = 100)
+
+
+summary %>% ggplot()+
+  aes(x=factor(prev_congruent, levels = c(0,1)), y=mean_rt, color=as.factor(congruent), group=as.factor(congruent)) +
+  geom_point()+
+  geom_path()
+
+mymodel = lm(RT ~ congruent * prev_congruent, data = raw_data)
+summary(mymodel)
+```
+
