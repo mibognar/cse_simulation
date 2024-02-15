@@ -1,0 +1,18 @@
+---
+title: "cse_read_empirical"
+author: "Miklos Bognar"
+date: "2024-02-14"
+output: html_document
+---
+
+```{r}
+library(osfr)
+library(dplyr)
+library(tidyverse)
+library(papaja)
+```
+```{r}
+
+```
+
+
