@@ -11,8 +11,102 @@ library(dplyr)
 library(tidyverse)
 library(papaja)
 ```
+## Read empirical dataframes
+### Flanker 2020
+An online control experiment from 2 separate data collections. No response deadline
 ```{r}
-
+osf_retrieve_file("hsdxk") %>%
+  osf_download(path = "data/empirical")
 ```
+
+#### Read data, calculate response times and remove unused variables
+```{r}
+flanker2020 = read_tsv("data/empirical/flanker_raw_data.tsv")
+flanker2020 =flanker2020 %>% 
+  mutate(rt = response_time - stim_onset,
+         correct = ifelse(response_target == response_content, 1,0),
+         prev_correct = ifelse(lag(correct)==1,1,0),
+         prev_congruent = ifelse(lag(is_congruent)==1, 1,0),
+         first_trial = ifelse(block != lag(block),1,0)) %>% 
+  select(participant_id,is_practice,is_congruent,prev_congruent,correct,prev_correct,rt,first_trial)
+```
+
+#### remove responses longer that 2000ms; practice trials and first trials of block
+```{r}
+flanker2020_processed = flanker2020 %>% 
+  filter(rt<2000,
+         is_practice == 0,
+         first_trial == 0)
+```
+
+#### rt distribution
+```{r}
+flanker2020_congruent = flanker2020_processed %>% 
+  filter(is_congruent == 1)
+flanker2020_incongruent = flanker2020_processed %>% 
+  filter(is_congruent == 0)
+
+ggplot()+
+  geom_histogram(aes(x = rt),
+                 data = flanker2020_incongruent, fill = "red", alpha=.6)+
+  geom_histogram(aes(x = rt),
+                 data = flanker2020_congruent, fill = "blue", alpha=.4)
+```
+#### CSE summary
+```{r}
+flanker2020_summary = flanker2020_processed %>% 
+  group_by(participant_id, is_congruent, prev_congruent) %>% 
+  summarize(N = n(),
+            mean_rt = mean(rt, na.rm=T),
+            sd_rt = sd(rt, na.rm=T),
+            se_rt = sd_rt/sqrt(N-1)) %>% 
+  ungroup()
+
+flanker2020_subj_cse = flanker2020_summary %>% 
+  select(participant_id, mean_rt, is_congruent, prev_congruent) %>% 
+  group_by(participant_id) %>% 
+  pivot_wider(values_from = mean_rt, names_from = c("prev_congruent","is_congruent")) %>% 
+  mutate(CSE = (`1_0`-`1_1`)-(`0_0`-`0_1`)) %>% 
+  ungroup()
+
+
+mean(flanker2020_subj_cse$CSE, na.rm = T)
+sd(flanker2020_subj_cse$CSE, na.rm = T)
+
+flanker2020_grand_summary = flanker2020_summary %>% 
+  group_by(is_congruent,prev_congruent) %>% 
+  summarize(rt_mean = mean(mean_rt, na.rm = T),
+            rt_sd = sd(mean_rt, na.rm=T))
+
+flanker2020_grand_summary %>% ggplot() +
+  aes(x = prev_congruent, y = rt_mean, group = is_congruent, color=is_congruent)+
+  geom_point() +
+  geom_path()
+```
+
+
+
+
+```{r}
+osf_retrieve_file("eu6rq") %>%
+  osf_download(path = "data/empirical")
+
+flanker2023 = read_csv("data/empirical/zhang_replication_data.csv")
+```
+```{r}
+osf_retrieve_file("w4nzj") %>%
+  osf_download(path = "data/empirical")
+
+primeprobe2020 = read_tsv("data/empirical/prime_probe_global_raw_data.tsv")
+
+primeprobe2020 = primeprobe2020 %>% 
+  mutate(rt = response_time - probe_onset,
+         correct = ifelse(response_target == response_content, 1,0),
+         prev_correct = ifelse(lag(correct)==1,1,0),
+         prev_congruent = ifelse(lag(is_congruent)==1, 1,0),
+         first_trial = ifelse(block != lag(block),1,0)) %>% 
+  select(is_practice,is_congruent,prev_congruent,correct,prev_correct,rt,first_trial)
+```
+## 
 
 
