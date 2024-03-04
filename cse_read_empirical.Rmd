@@ -10,15 +10,46 @@ library(osfr)
 library(dplyr)
 library(tidyverse)
 library(papaja)
+library(EZ2)
+library(rtdists)
+library(MASS)
 ```
 ## Read empirical dataframes
-### Flanker 2020
+#### Flanker 2020
 An online control experiment from 2 separate data collections. No response deadline
 ```{r}
 osf_retrieve_file("hsdxk") %>%
   osf_download(path = "data/empirical")
 ```
 
+#### Primeprobe 2020
+An online control experiment from 2 separate data collections. 2000ms response deadline
+```{r}
+osf_retrieve_file("w4nzj") %>%
+  osf_download(path = "data/empirical")
+
+primeprobe2020 = read_tsv("data/empirical/prime_probe_global_raw_data.tsv")
+
+primeprobe2020 = primeprobe2020 %>% 
+  mutate(rt = response_time - probe_onset,
+         correct = ifelse(response_target == response_content, 1,0),
+         prev_correct = ifelse(lag(correct)==1,1,0),
+         prev_congruent = ifelse(lag(is_congruent)==1, 1,0),
+         first_trial = ifelse(block != lag(block),1,0)) %>% 
+  select(is_practice,is_congruent,prev_congruent,correct,prev_correct,rt,first_trial)
+```
+
+#### Flanker 2023
+An online experiment, one data collection. 
+```{r}
+osf_retrieve_file("eu6rq") %>%
+  osf_download(path = "data/empirical")
+
+flanker2023 = read_csv("data/empirical/zhang_replication_data.csv")
+```
+
+
+## Flanker 2020
 #### Read data, calculate response times and remove unused variables
 ```{r}
 flanker2020 = read_tsv("data/empirical/flanker_raw_data.tsv")
@@ -28,7 +59,7 @@ flanker2020 =flanker2020 %>%
          prev_correct = ifelse(lag(correct)==1,1,0),
          prev_congruent = ifelse(lag(is_congruent)==1, 1,0),
          first_trial = ifelse(block != lag(block),1,0)) %>% 
-  select(participant_id,is_practice,is_congruent,prev_congruent,correct,prev_correct,rt,first_trial)
+  dplyr::select(participant_id,is_practice,is_congruent,prev_congruent,correct,prev_correct,rt,first_trial)
 ```
 
 #### remove responses longer that 2000ms; practice trials and first trials of block
@@ -48,65 +79,156 @@ flanker2020_incongruent = flanker2020_processed %>%
 
 ggplot()+
   geom_histogram(aes(x = rt),
-                 data = flanker2020_incongruent, fill = "red", alpha=.6)+
+                 data = flanker2020_incongruent, fill = "red", alpha=.2)+
   geom_histogram(aes(x = rt),
                  data = flanker2020_congruent, fill = "blue", alpha=.4)
 ```
 #### CSE summary
 ```{r}
-flanker2020_summary = flanker2020_processed %>% 
-  group_by(participant_id, is_congruent, prev_congruent) %>% 
+flanker2020_summary_parameters = flanker2020_processed %>% 
+  group_by(is_congruent, prev_congruent) %>% 
   summarize(N = n(),
-            mean_rt = mean(rt, na.rm=T),
-            sd_rt = sd(rt, na.rm=T),
-            se_rt = sd_rt/sqrt(N-1)) %>% 
-  ungroup()
-
-flanker2020_subj_cse = flanker2020_summary %>% 
-  select(participant_id, mean_rt, is_congruent, prev_congruent) %>% 
-  group_by(participant_id) %>% 
-  pivot_wider(values_from = mean_rt, names_from = c("prev_congruent","is_congruent")) %>% 
-  mutate(CSE = (`1_0`-`1_1`)-(`0_0`-`0_1`)) %>% 
+            mean_rt = mean(rt, na.rm=T)/1000,
+            var_rt = var(rt, na.rm=T)/1000000,
+            sd_rt = sd(rt, na.rm=T)/1000,
+            correct_percent = mean(correct, n.rm=T)) %>% 
   ungroup()
 
 
-mean(flanker2020_subj_cse$CSE, na.rm = T)
-sd(flanker2020_subj_cse$CSE, na.rm = T)
 
-flanker2020_grand_summary = flanker2020_summary %>% 
+
+```
+## Function to create covariance matrix
+```{r}
+covmatrix = function(sd_a,sd_b,sd_c,cor_AB,cor_AC,cor_BC){
+  covarAB = cor_AB*sd_a*sd_b
+  covarAC = cor_AC*sd_a*sd_b
+  covarBC = cor_BC*sd_b*sd_c
+  
+  cov_matrix = matrix(c(sd_a^2, covarAB, covarAC,
+  					 covarAB, sd_b^2, covarBC,
+  					 covarAC, covarBC,sd_c^2),
+  					 3,3)
+  
+  return(cov_matrix)
+}
+```
+
+## Function to use the covariance matrix in generating a subject condition
+```{r}
+generate_condition = function(mean_a,mean_b,mean_c, cov_matrix){
+  means = c(mean_a, mean_b, mean_c)
+  
+  data = MASS::mvrnorm(n = 1,  
+	  mu = means,  
+  	Sigma = cov_matrix
+  )
+  return(data)
+}
+```
+
+
+### Function to combine the condition generation and the covariance matrix
+
+```{r}
+generate_subject_condition = function(mean_a,mean_b,mean_c,sd_a,sd_b,sd_c,cor_AB,cor_AC,cor_BC){
+  covariance_matrix = covmatrix(sd_a,sd_b,sd_c,cor_AB,cor_AC,cor_BC)
+  value_list = generate_condition(mean_a,mean_b,mean_c,covariance_matrix)
+  return(value_list)
+}
+testlist = generate_subject_condition(0,0,0,1,1,1,.5,.2,.2)
+
+
+# Create a vector of subject IDs, repeated for each condition
+subjects <- data.frame(subject_id = 1:300,
+                       random_intercept = rnorm(300, mean=0, sd=.05))
+
+# Step 2: Expand the dataframe to include all combinations of x and y for each subject
+# Each subject will have four rows, representing the four combinations of x and y
+expanded_data <- subjects %>%
+  uncount(4) %>%
+  group_by(subject_id) %>%
+  mutate(is_congruent = c(0, 0, 1, 1),
+         prev_congruent = c(0, 1, 0, 1)) %>%
+  ungroup() 
+
+expanded_flanker_data = expanded_data %>% 
+  left_join(flanker2020_summary_parameters, by=c("is_congruent","prev_congruent"))
+
+
+
+# Apply generate_subject_condition to each row
+
+result_df = expanded_flanker_data %>% 
+  uncount(25) %>% 
+  group_by(subject_id, is_congruent, prev_congruent) %>% 
+  mutate(trial = 1:25) %>% 
+  ungroup()
+
+simsummary = result_df %>% 
   group_by(is_congruent,prev_congruent) %>% 
-  summarize(rt_mean = mean(mean_rt, na.rm = T),
-            rt_sd = sd(mean_rt, na.rm=T))
+  summarize(RT = mean(rt, na.rm = T))
 
-flanker2020_grand_summary %>% ggplot() +
-  aes(x = prev_congruent, y = rt_mean, group = is_congruent, color=is_congruent)+
-  geom_point() +
+simsummary %>% ggplot()+
+  aes(x=factor(prev_congruent, levels = c(0,1)), y=RT, color=as.factor(is_congruent), group=as.factor(is_congruent)) +
+  geom_point()+
   geom_path()
+
 ```
-
-
 
 
 ```{r}
-osf_retrieve_file("eu6rq") %>%
-  osf_download(path = "data/empirical")
+result_df <- result_df %>%
+  mutate(Result = pmap(list(
+    correct_percent,
+    var_rt,
+    mean_rt
+    ),
+    Data2EZ),
+         v = map_dbl(Result, "v"),
+         a = map_dbl(Result, "a"),
+         Ter = map_dbl(Result, "Ter")) %>% 
+  dplyr::select(-Result)
+```
 
-flanker2023 = read_csv("data/empirical/zhang_replication_data.csv")
+
+
+
+## Rdiffusion create reaction time
+```{r}
+
+result_df2 = result_df %>% 
+  rowwise() %>% 
+  mutate(result=list(rdiffusion(n=30000,
+                         a=a,
+                         v=v,
+                         t0=Ter))) %>% 
+  unnest_wider(result)
+
+
+correct = result_df2 %>% 
+  filter(response == "upper")
+
+incorrect = result_df2 %>% 
+  filter(response == "lower")
+
+ggplot() +
+  aes(x = rt) +
+  geom_histogram(data = correct, fill = "blue", alpha=.2, bins = 30)+
+  geom_histogram(data = incorrect, fill = "red", alpha=.6, bins = 30)
+  
+
+
+
+
 ```
 ```{r}
-osf_retrieve_file("w4nzj") %>%
-  osf_download(path = "data/empirical")
+testframe2 = flanker2020 %>% 
+  filter(rt<1500)
 
-primeprobe2020 = read_tsv("data/empirical/prime_probe_global_raw_data.tsv")
-
-primeprobe2020 = primeprobe2020 %>% 
-  mutate(rt = response_time - probe_onset,
-         correct = ifelse(response_target == response_content, 1,0),
-         prev_correct = ifelse(lag(correct)==1,1,0),
-         prev_congruent = ifelse(lag(is_congruent)==1, 1,0),
-         first_trial = ifelse(block != lag(block),1,0)) %>% 
-  select(is_practice,is_congruent,prev_congruent,correct,prev_correct,rt,first_trial)
+ggplot() +
+  aes(x=rt) %>% 
+  geom_histogram(data = testframe2)
 ```
-## 
 
 
