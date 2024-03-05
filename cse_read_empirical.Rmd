@@ -12,7 +12,7 @@ library(tidyverse)
 library(papaja)
 library(EZ2)
 library(rtdists)
-library(MASS)
+source("utils.R")
 ```
 ## Read empirical dataframes
 #### Flanker 2020
@@ -65,7 +65,8 @@ flanker2020 =flanker2020 %>%
 #### remove responses longer that 2000ms; practice trials and first trials of block
 ```{r}
 flanker2020_processed = flanker2020 %>% 
-  filter(rt<2000,
+  filter(rt<2400,
+         rt>250,
          is_practice == 0,
          first_trial == 0)
 ```
@@ -86,7 +87,7 @@ ggplot()+
 #### CSE summary
 ```{r}
 flanker2020_summary_parameters = flanker2020_processed %>% 
-  group_by(is_congruent, prev_congruent) %>% 
+  group_by(participant_id,is_congruent, prev_congruent) %>% 
   summarize(N = n(),
             mean_rt = mean(rt, na.rm=T)/1000,
             var_rt = var(rt, na.rm=T)/1000000,
@@ -98,89 +99,12 @@ flanker2020_summary_parameters = flanker2020_processed %>%
 
 
 ```
-## Function to create covariance matrix
+# create EZ parameters from condition data
 ```{r}
-covmatrix = function(sd_a,sd_b,sd_c,cor_AB,cor_AC,cor_BC){
-  covarAB = cor_AB*sd_a*sd_b
-  covarAC = cor_AC*sd_a*sd_b
-  covarBC = cor_BC*sd_b*sd_c
-  
-  cov_matrix = matrix(c(sd_a^2, covarAB, covarAC,
-  					 covarAB, sd_b^2, covarBC,
-  					 covarAC, covarBC,sd_c^2),
-  					 3,3)
-  
-  return(cov_matrix)
-}
-```
-
-## Function to use the covariance matrix in generating a subject condition
-```{r}
-generate_condition = function(mean_a,mean_b,mean_c, cov_matrix){
-  means = c(mean_a, mean_b, mean_c)
-  
-  data = MASS::mvrnorm(n = 1,  
-	  mu = means,  
-  	Sigma = cov_matrix
-  )
-  return(data)
-}
-```
-
-
-### Function to combine the condition generation and the covariance matrix
-
-```{r}
-generate_subject_condition = function(mean_a,mean_b,mean_c,sd_a,sd_b,sd_c,cor_AB,cor_AC,cor_BC){
-  covariance_matrix = covmatrix(sd_a,sd_b,sd_c,cor_AB,cor_AC,cor_BC)
-  value_list = generate_condition(mean_a,mean_b,mean_c,covariance_matrix)
-  return(value_list)
-}
-testlist = generate_subject_condition(0,0,0,1,1,1,.5,.2,.2)
-
-
-# Create a vector of subject IDs, repeated for each condition
-subjects <- data.frame(subject_id = 1:300,
-                       random_intercept = rnorm(300, mean=0, sd=.05))
-
-# Step 2: Expand the dataframe to include all combinations of x and y for each subject
-# Each subject will have four rows, representing the four combinations of x and y
-expanded_data <- subjects %>%
-  uncount(4) %>%
-  group_by(subject_id) %>%
-  mutate(is_congruent = c(0, 0, 1, 1),
-         prev_congruent = c(0, 1, 0, 1)) %>%
-  ungroup() 
-
-expanded_flanker_data = expanded_data %>% 
-  left_join(flanker2020_summary_parameters, by=c("is_congruent","prev_congruent"))
-
-
-
-# Apply generate_subject_condition to each row
-
-result_df = expanded_flanker_data %>% 
-  uncount(25) %>% 
-  group_by(subject_id, is_congruent, prev_congruent) %>% 
-  mutate(trial = 1:25) %>% 
-  ungroup()
-
-simsummary = result_df %>% 
-  group_by(is_congruent,prev_congruent) %>% 
-  summarize(RT = mean(rt, na.rm = T))
-
-simsummary %>% ggplot()+
-  aes(x=factor(prev_congruent, levels = c(0,1)), y=RT, color=as.factor(is_congruent), group=as.factor(is_congruent)) +
-  geom_point()+
-  geom_path()
-
-```
-
-
-```{r}
-result_df <- result_df %>%
+diffusion_parameters_data <- flanker2020_summary_parameters %>%
+  filter(correct_percent>.5) %>% 
   mutate(Result = pmap(list(
-    correct_percent,
+    ifelse(correct_percent==1, 1-1/(N*2),correct_percent),
     var_rt,
     mean_rt
     ),
@@ -191,37 +115,42 @@ result_df <- result_df %>%
   dplyr::select(-Result)
 ```
 
-
-
-
-## Rdiffusion create reaction time
+TEST DATA
 ```{r}
+testdf = diffusion_parameters_data %>%
+  filter(Ter>.1) %>% 
+  mutate(Result=pmap(
+    list(80,
+         a=a,
+         v=v,
+         t0=Ter,
+         d=-.02,
+         z=.85*a),
+    rdiffusion)) %>% 
+  unnest(Result)
 
-result_df2 = result_df %>% 
-  rowwise() %>% 
-  mutate(result=list(rdiffusion(n=30000,
-                         a=a,
-                         v=v,
-                         t0=Ter))) %>% 
-  unnest_wider(result)
-
-
-correct = result_df2 %>% 
-  filter(response == "upper")
-
-incorrect = result_df2 %>% 
-  filter(response == "lower")
+test_lower = testdf %>% filter(response=="lower")
+test_upper = testdf %>% filter(response=="upper")
 
 ggplot() +
-  aes(x = rt) +
-  geom_histogram(data = correct, fill = "blue", alpha=.2, bins = 30)+
-  geom_histogram(data = incorrect, fill = "red", alpha=.6, bins = 30)
-  
-
-
-
-
+  aes(x=rt)+
+  geom_histogram(data = test_lower, fill="red", alpha=.6)+
+  geom_histogram(data = test_upper, fill="blue", alpha=.4)
+head(testdf)
 ```
+
+```{r}
+test_upper %>%
+  group_by(is_congruent, prev_congruent) %>% 
+  summarize(mean_rt =mean(rt, na.rm = T)) %>% 
+  ggplot()+
+  aes(x=as.factor(prev_congruent), y=mean_rt, color=as.factor(is_congruent), group=as.factor(is_congruent))+
+  geom_point()+
+  geom_path()
+```
+
+
+
 ```{r}
 testframe2 = flanker2020 %>% 
   filter(rt<1500)
@@ -229,6 +158,14 @@ testframe2 = flanker2020 %>%
 ggplot() +
   aes(x=rt) %>% 
   geom_histogram(data = testframe2)
+
+flanker2020_processed_correct =flanker2020_processed%>% 
+  filter(correct == 1)
+flanker2020_processed_incorrect =flanker2020_processed%>% 
+  filter(correct == 0)
+
+ggplot() +
+  aes(x=rt)+
+  geom_histogram(data = flanker2020_processed_incorrect, fill="red", alpha=.6)+
+  geom_histogram(data = flanker2020_processed_correct, fill="blue", alpha=.4)
 ```
-
-
