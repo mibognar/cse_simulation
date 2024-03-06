@@ -106,8 +106,8 @@ diffusion_parameters_data <- flanker2020_summary_parameters %>%
   mutate(Result = pmap(list(
     ifelse(correct_percent==1, 1-1/(N*2),correct_percent),
     var_rt,
-    mean_rt
-    ),
+    mean_rt,
+    s=1),
     Data2EZ),
          v = map_dbl(Result, "v"),
          a = map_dbl(Result, "a"),
@@ -118,14 +118,12 @@ diffusion_parameters_data <- flanker2020_summary_parameters %>%
 TEST DATA
 ```{r}
 testdf = diffusion_parameters_data %>%
-  filter(Ter>.1) %>% 
+ # filter(Ter>.1) %>% 
   mutate(Result=pmap(
     list(80,
          a=a,
          v=v,
-         t0=Ter,
-         d=-.02,
-         z=.85*a),
+         t0=Ter),
     rdiffusion)) %>% 
   unnest(Result)
 
@@ -135,12 +133,14 @@ test_upper = testdf %>% filter(response=="upper")
 ggplot() +
   aes(x=rt)+
   geom_histogram(data = test_lower, fill="red", alpha=.6)+
-  geom_histogram(data = test_upper, fill="blue", alpha=.4)
+  geom_histogram(data = test_upper, fill="blue", alpha=.4)+
+  xlim(0,2.5)
 head(testdf)
 ```
 
 ```{r}
-test_upper %>%
+test_upper %>% 
+  filter(participant_id == 45) %>% 
   group_by(is_congruent, prev_congruent) %>% 
   summarize(mean_rt =mean(rt, na.rm = T)) %>% 
   ggplot()+
