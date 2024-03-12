@@ -46,6 +46,7 @@ osf_retrieve_file("eu6rq") %>%
   osf_download(path = "data/empirical")
 
 flanker2023 = read_csv("data/empirical/zhang_replication_data.csv")
+
 ```
 
 
@@ -95,6 +96,25 @@ flanker2020_summary_parameters = flanker2020_processed %>%
             correct_percent = mean(correct, n.rm=T)) %>% 
   ungroup()
 ```
+#### CSE participant summary 
+```{r}
+cse_participant = flanker2020_processed %>% 
+  group_by(participant_id) %>% 
+  summarize(var_rt = var(rt,na.rm=T)/1000000)
+
+hist(cse_participant$var_rt)
+```
+#random participants
+```{r}
+testdf = data.frame(participant_id = 1:300,
+                    rt_rand = rnorm(300, 1, .05),
+                    var_rand = rnorm(300,1,.05),
+                    correct_rand = rnorm(300,1,.05)) %>% 
+  uncount(2) %>% 
+  mutate(is_congruent = rep(0:1, each=1, length.out=n())) %>% 
+  uncount(2) %>% 
+  mutate(prev_congruent = rep(0:1, each=1, length.out=n()))
+```
 
 
 ```{r}
@@ -127,13 +147,15 @@ beta <- alpha * ((1 / desired_mean) - 1)
 
 # Generate data
 data <- rbeta(2500, alpha, beta)
+data = rbeta(2000,1,10.63261)
 
 # Verify the mean
 mean(data)
 ggplot()+
   aes(x=data) +
-  geom_histogram(bins = 30)+
-  xlim(.75,1.1)
+  geom_histogram(bins = 30)
+
+min(data)*.99
 ```
 
 ### Simulate rt var
@@ -147,6 +169,9 @@ beta <- alpha * ((1 / desired_mean) - 1)
 
 # Generate data
 data <- rbeta(2500, alpha, beta)
+randata = rnorm(20000,mean = 0, sd = .1)
+
+hist(randata)
 
 # Verify the mean
 mean(data)
