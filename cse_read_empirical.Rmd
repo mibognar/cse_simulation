@@ -94,11 +94,69 @@ flanker2020_summary_parameters = flanker2020_processed %>%
             sd_rt = sd(rt, na.rm=T)/1000,
             correct_percent = mean(correct, n.rm=T)) %>% 
   ungroup()
-
-
-
-
 ```
+
+
+```{r}
+flanker2020_summary_parameters %>% 
+  ggplot()+
+  aes(x=correct_percent) +
+  geom_histogram(bins = 30)+
+  xlim(.75,1.1)
+
+mean(flanker2020_summary_parameters$correct_percent)
+```
+
+```{r}
+flanker2020_summary_parameters %>% 
+  ggplot()+
+  aes(x=var_rt) +
+  geom_histogram(bins = 30)
+
+mean(flanker2020_summary_parameters$var_rt)
+```
+
+### Simulate correct_percent
+```{r}
+#
+desired_mean <- 0.9475356  # Set your desired mean
+alpha <- 12  # Fixed alpha
+
+# Calculate beta based on the desired mean and fixed alpha
+beta <- alpha * ((1 / desired_mean) - 1)
+
+# Generate data
+data <- rbeta(2500, alpha, beta)
+
+# Verify the mean
+mean(data)
+ggplot()+
+  aes(x=data) +
+  geom_histogram(bins = 30)+
+  xlim(.75,1.1)
+```
+
+### Simulate rt var
+```{r}
+#
+desired_mean <- 0.08596523  # Set your desired mean
+alpha <- 1  # Fixed alpha
+
+# Calculate beta based on the desired mean and fixed alpha
+beta <- alpha * ((1 / desired_mean) - 1)
+
+# Generate data
+data <- rbeta(2500, alpha, beta)
+
+# Verify the mean
+mean(data)
+ggplot()+
+  aes(x=data) +
+  geom_histogram(bins = 30)
+
+max(data)
+```
+
 # create EZ parameters from condition data
 ```{r}
 diffusion_parameters_data <- flanker2020_summary_parameters %>%
