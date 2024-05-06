@@ -1,0 +1,135 @@
+---
+title: "reaction_time_simulation"
+output: html_document
+date: "2024-03-27"
+---
+
+### Read libraries
+```{r}
+library(tidyverse)
+library(EZ2)
+library(fdrtool)
+library(ez)
+library(rtdists)
+library(gamlss.dist)
+library(lme4)
+library(lmerTest)
+```
+
+### Load empirical data summary
+```{r}
+load("flanker2020.Rda")
+flanker2020_summary = flanker2020_summary %>% 
+  rename(glob_rtm = mean_rt,
+         glob_rtv = var_rt,
+         glob_rts = sd_rt,
+         glob_rtc = correct_percent) %>% 
+  dplyr::select(-"N")
+```
+
+### Create participants 
+```{r}
+source_data = data.frame(participant_id = c(1:100),
+                         rt_intercept = rnorm(100, 1, 0.1),
+                         rt_random_slope = rnorm(100, 0, 5)) %>% 
+  uncount(2) %>% 
+  mutate(is_congruent = rep(0:1, each=1, length.out=n())) %>% 
+  uncount(2) %>% 
+  mutate(prev_congruent = rep(0:1, each=1, length.out=n())) %>% 
+  left_join(flanker2020_summary, by=c("is_congruent","prev_congruent")) %>% 
+  mutate(mean_rt = glob_rtm*rt_intercept
+         )
+```
+
+
+```{r}
+source_data %>% ggplot()+
+  aes(x=mean_rt) +
+  geom_histogram()
+```
+```{r}
+cse_data = source_data %>% 
+  group_by(is_congruent,prev_congruent) %>% 
+  summarize(rt_mean = mean(mean_rt)) %>% 
+  ggplot()+
+  aes(x=as.factor(prev_congruent), y=rt_mean, group=as.factor(is_congruent))+
+  geom_point()+
+  geom_path()
+
+cse_data
+```
+```{r}
+source_data <- source_data %>%
+  filter(glob_rtc>.5) %>% 
+  mutate(Result = pmap(list(
+    ifelse(glob_rtc==1, 1-1/(N*2),glob_rtc),
+    glob_rtv,
+    mean_rt,
+    s=1),
+    Data2EZ),
+         v = map_dbl(Result, "v"),
+         a = map_dbl(Result, "a"),
+         Ter = map_dbl(Result, "Ter")) %>% 
+  dplyr::select(-Result)
+```
+
+### Create data with diffusion model
+```{r}
+testdf = source_data %>%
+ # filter(Ter>.1) %>% 
+  mutate(Result=pmap(
+    list(80,
+         a=a,
+         v=v,
+         t0=Ter),
+    rdiffusion)) %>% 
+  unnest(Result)
+
+hist(testdf$rt)
+```
+### Filtering
+```{r}
+participant_summary = testdf %>% 
+  group_by(participant_id, is_congruent, prev_congruent) %>% 
+  summarize(participant_mean_rt = mean(rt),
+            participant_sd_rt = sd(rt))
+
+testdf = testdf %>% 
+  left_join(participant_summary, by = c("participant_id", "is_congruent", "prev_congruent")) %>% 
+  mutate(rt_zscore = (rt-participant_mean_rt/participant_sd_rt))
+```
+
+
+```{r}
+testfilter = testdf %>% 
+  filter(response == "upper",
+         abs(rt_zscore)<2)
+```
+
+```{r}
+csemodel = lmer(rt ~ is_congruent*prev_congruent + (1|participant_id),data=testfilter)
+summary(csemodel)
+```
+
+```{r}
+anova_summary = testfilter %>% 
+  group_by(participant_id, is_congruent, prev_congruent) %>% 
+  summarize(mean_rt = mean(rt, na.rm=T)) %>% 
+  ungroup() %>% 
+  group_by(participant_id) %>% 
+  filter(n_distinct(is_congruent, prev_congruent)==4) %>% 
+  mutate(is_congruent = as.factor(is_congruent),
+         prev_congruent = as.factor(prev_congruent))
+
+csenova <- ezANOVA(data = anova_summary,
+                         dv = mean_rt,
+                         wid = as.factor(participant_id),
+                         within = .(is_congruent, prev_congruent)
+                   )
+
+print(csenova)
+```
+
+
+
+
