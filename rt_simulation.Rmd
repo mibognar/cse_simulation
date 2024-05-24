@@ -30,15 +30,15 @@ flanker2020_summary = flanker2020_summary %>%
 ### Create participants 
 ```{r}
 source_data = data.frame(participant_id = c(1:100),
-                         rt_intercept = rnorm(100, 1, 0.1),
-                         rt_random_slope = rnorm(100, 0, 5)) %>% 
+                         rt_intercept = rnorm(100, 0, 0.1),
+                         rt_random_slope = rnorm(100, 0, 0.01)) %>% 
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each=1, length.out=n())) %>% 
   uncount(2) %>% 
   mutate(prev_congruent = rep(0:1, each=1, length.out=n())) %>% 
   left_join(flanker2020_summary, by=c("is_congruent","prev_congruent")) %>% 
-  mutate(mean_rt = glob_rtm*rt_intercept
-         )
+  mutate(mean_rt = case_when(is_congruent == 1 ~ glob_rtm+rt_intercept-rt_random_slope,
+                             is_congruent == 0 ~ glob_rtm+rt_intercept+rt_random_slope))
 ```
 
 
@@ -58,6 +58,18 @@ cse_data = source_data %>%
 
 cse_data
 ```
+## check congruency effect data
+```{r}
+ce_data = source_data %>% 
+  group_by(participant_id, is_congruent) %>% 
+  summarize(mean_rt = mean(mean_rt)) %>% 
+  pivot_wider(values_from = mean_rt, names_from = is_congruent, names_prefix = "con_") %>% 
+  mutate(ce = con_0 - con_1)
+
+hist(ce_data$ce)
+```
+
+
 ```{r}
 source_data <- source_data %>%
   filter(glob_rtc>.5) %>% 
@@ -76,7 +88,7 @@ source_data <- source_data %>%
 ### Create data with diffusion model
 ```{r}
 testdf = source_data %>%
- # filter(Ter>.1) %>% 
+  filter(Ter>.1) %>% 
   mutate(Result=pmap(
     list(80,
          a=a,
@@ -107,7 +119,7 @@ testfilter = testdf %>%
 ```
 
 ```{r}
-csemodel = lmer(rt ~ is_congruent*prev_congruent + (1|participant_id),data=testfilter)
+csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id),data=testfilter)
 summary(csemodel)
 ```
 
