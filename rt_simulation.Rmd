@@ -14,6 +14,7 @@ library(rtdists)
 library(gamlss.dist)
 library(lme4)
 library(lmerTest)
+library(parallel)
 ```
 
 ### Load empirical data summary
@@ -120,7 +121,21 @@ testfilter = testdf %>%
 
 ```{r}
 csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id),data=testfilter)
-summary(csemodel)
+bigmodel = summary(csemodel)
+bigmodel
+```
+```{r}
+testfilter %>% group_by(is_congruent, prev_congruent) %>% 
+  summarize(mean_rt =mean(rt, na.rm = T)) %>% 
+  ggplot()+
+  aes(x=as.factor(prev_congruent), y=mean_rt, color=as.factor(is_congruent), group=as.factor(is_congruent))+
+  geom_point()+
+  geom_path()
+```
+
+
+```{r}
+bigmodel$coefficients[20]
 ```
 
 ```{r}
@@ -139,9 +154,51 @@ csenova <- ezANOVA(data = anova_summary,
                          within = .(is_congruent, prev_congruent)
                    )
 
+csenova$ANOVA$p[3]
 print(csenova)
 ```
 
+```{r}
+sd2list = vector("list", 100)
+sd3list = vector("list", 100)
+nonelist = vector("list", 100)
+for(j in 1:100){
+  sd2list[[j]] = test_simulation(flanker2020_summary, 50,80,2, "2SD")
+  print(j)
+}
+sd2df = as.data.frame(do.call(rbind, sd2list))
 
+for(j in 1:100){
+  sd3list[[j]] = test_simulation(flanker2020_summary, 50,80,2.5, "2.5SD")
+  print(j)
+}
+sd3df = as.data.frame(do.call(rbind, sd3list))
+
+for(j in 1:100){
+  nonelist[[j]] = test_simulation(flanker2020_summary, 50,80,3, "3SD")
+  print(j)
+}
+nonedf = as.data.frame(do.call(rbind, nonelist))
+
+alldf = rbind(sd2df,sd3df,nonedf)
+colnames(alldf) = c("estimate","slope_p", "intercept_p", "anova_p","filtering")
+
+alldf %>% group_by(filtering) %>% 
+  summarize(intercept_slope_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
+            intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm=T),
+            anova = mean(as.integer(as.logical(anova_p)), na.rm=T))
+```
+```{r}
+cl = makeCluster(3)
+clusterExport(cl, c("simulate_data","test_simulation", "test_sequences","flanker2020_summary"), 
+              envir=environment())
+
+parameters80 = list(list(10,100,80),list(10,200,80), list(10,300,80))
+trial_80_results = lapply(parameters80, function(x) do.call(test_sequences, x))
+
+parameters160 = list(list(100,100,160),list(100,200,160), list(100,300,160))
+trial_160_results = lapply(parameters160, function(x) do.call(test_sequences, x))
+
+```
 
 
