@@ -96,31 +96,39 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
                      wid = participant_id,
                      within = .(is_congruent, prev_congruent)
   )
+  cse_table = testfilter %>% 
+    group_by(prev_congruent, is_congruent) %>% 
+    summarize(mean_rt = mean(rt, na.rm=T)) %>% 
+    ungroup() %>% 
+    pivot_wider(names_from = c("prev_congruent","is_congruent"), names_sep = "_", values_from = mean_rt)
   
+  cse = (cse_table$`1_0`-cse_table$`1_1`)-(cse_table$`0_0`-cse_table$`0_1`)>0
   anova_p = csenova$ANOVA$p[3]
-  
-  return(c(big_csemodel_estimate, big_csemodel_p<.05, small_csemodel_p<.05, anova_p<.05, flag))
+  return(c(big_csemodel_estimate,
+           ifelse(cse,big_csemodel_p<.05,F),
+           ifelse(cse,small_csemodel_p<.05,F),
+           ifelse(cse,anova_p<.05,F), flag))
 }
 
-test_sequences = function(runs, participants, trials){
+test_sequences = function(effect_table, runs, participants, trials){
   
   sd2list = vector("list", runs)
   sd3list = vector("list", runs)
   nonelist = vector("list", runs)
   for(j in 1:runs){
-    sd2list[[j]] = test_simulation(flanker2020_summary, participants,trials,2, "2SD filter")
+    sd2list[[j]] = test_simulation(effect_table, participants,trials,2.5, "2.5SD filter")
     print(j)
   }
   sd2df = as.data.frame(do.call(rbind, sd2list))
   
   for(j in 1:runs){
-    sd3list[[j]] = test_simulation(flanker2020_summary, participants,trials,2.5, "2 and a half SD filter")
+    sd3list[[j]] = test_simulation(effect_table, participants,trials,3, "3 SD filter")
     print(j)
   }
   sd3df = as.data.frame(do.call(rbind, sd3list))
   
   for(j in 1:runs){
-    nonelist[[j]] = test_simulation(flanker2020_summary, participants,trials,3, "3SD filter")
+    nonelist[[j]] = test_simulation(effect_table, participants,trials,1000, "No filter")
     print(j)
   }
   nonedf = as.data.frame(do.call(rbind, nonelist))
