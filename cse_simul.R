@@ -69,6 +69,10 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
     filter(response == "upper",
            abs(rt_zscore)<sd_filter)
   
+  #Fit model with glmer
+  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id), data = testfilter, family = gaussian(link = "log"))
+  generalized_big_csemodel_summary = summary(generalized_big_csemodel)
+  generalized_big_csemodel_p =generalized_big_csemodel_summary$coefficients[16]
   # Fit model with slope and intercept
   big_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id),data=testfilter, control = lmerControl(optimizer = "Nelder_Mead"))
   big_csemodel_summary = summary(big_csemodel)
@@ -105,6 +109,7 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   cse = (cse_table$`1_0`-cse_table$`1_1`)-(cse_table$`0_0`-cse_table$`0_1`)>0
   anova_p = csenova$ANOVA$p[3]
   return(c(big_csemodel_estimate,
+           ifelse(cse,generalized_big_csemodel_p<.05, F),
            ifelse(cse,big_csemodel_p<.05,F),
            ifelse(cse,small_csemodel_p<.05,F),
            ifelse(cse,anova_p<.05,F), flag))
@@ -134,11 +139,12 @@ test_sequences = function(effect_table, runs, participants, trials){
   nonedf = as.data.frame(do.call(rbind, nonelist))
   
   alldf = rbind(sd2df,sd3df,nonedf)
-  colnames(alldf) = c("estimate","slope_p", "intercept_p", "anova_p","filtering")
+  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "anova_p","filtering")
   
   testsummary = alldf %>%
     group_by(filtering) %>% 
-    summarize(intercept_slope_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
+    summarize(glmm_intercept_slope =mean(as.integer(as.logical(gen_slope_p)),na.rm=T),
+              intercept_slope_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
               intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm=T),
               anova = mean(as.integer(as.logical(anova_p)), na.rm=T))
   
