@@ -15,6 +15,7 @@ library(gamlss.dist)
 library(lme4)
 library(lmerTest)
 library(parallel)
+library(papaja)
 ```
 
 ### Load empirical data summary
@@ -109,7 +110,7 @@ participant_summary = testdf %>%
 
 testdf = testdf %>% 
   left_join(participant_summary, by = c("participant_id", "is_congruent", "prev_congruent")) %>% 
-  mutate(rt_zscore = (rt-participant_mean_rt/participant_sd_rt))
+  mutate(rt_zscore = ((rt-participant_mean_rt)/participant_sd_rt))
 ```
 
 
@@ -117,6 +118,12 @@ testdf = testdf %>%
 testfilter = testdf %>% 
   filter(response == "upper",
          abs(rt_zscore)<2)
+```
+
+
+```{r}
+ggplot(data=testfilter, aes(x = is_congruent, y = rt))+
+  geom_bar(stat = "identity")
 ```
 
 ```{r}
@@ -131,6 +138,27 @@ testfilter %>% group_by(is_congruent, prev_congruent) %>%
   aes(x=as.factor(prev_congruent), y=mean_rt, color=as.factor(is_congruent), group=as.factor(is_congruent))+
   geom_point()+
   geom_path()
+```
+
+```{r}
+testfilter %>%
+  mutate(is_congruent = ifelse(is_congruent == 0, "Incongruent", "Congruent"),
+         rt = rt * 1000) %>% 
+  group_by(is_congruent) %>% 
+  summarize(N = n(),
+            mean_rt =mean(rt, na.rm = T),
+            sd_rt =sd(rt, na.rm = T),
+            se_rt = sd_rt/sqrt(N)) %>% 
+  ggplot()+
+  aes(x=as.factor(is_congruent), y=mean_rt)+
+  geom_point()+
+  theme_apa()+
+  geom_errorbar(size=0.5,aes(ymin=mean_rt-se_rt,
+                    ymax=mean_rt+se_rt,
+                    width=.2))+
+  xlab("Trial congruency")+
+  ylab("Mean reaction time (ms)")
+ggsave("congruency_effect.jpg", width = 7, height = 5)
 ```
 
 
@@ -199,6 +227,63 @@ trial_80_results = lapply(parameters80, function(x) do.call(test_sequences, x))
 parameters160 = list(list(100,100,160),list(100,200,160), list(100,300,160))
 trial_160_results = lapply(parameters160, function(x) do.call(test_sequences, x))
 
+```
+
+## Plots
+```{r}
+load("large_effect.Rda")
+load("small_effect.Rda")
+load("no_effect.Rda")
+
+large_plot_data = large_effect %>% 
+  mutate(is_congruent = ifelse(is_congruent == 0, "incongruent", "congruent"),
+         prev_congruent = ifelse(prev_congruent == 0, "incongruent", "congruent"),
+         reaction_time = glob_rtm * 1000) %>% 
+  mutate(prev_congruent = factor(prev_congruent, levels=c("congruent","incongruent"))) %>% 
+  ggplot()+
+  aes(y=reaction_time, x=prev_congruent, color=is_congruent, group = is_congruent)+
+  geom_path(linewidth=1.5)+
+  papaja::theme_apa()+
+  geom_point(size=3)+
+  theme(legend.position = "none")
+```
+```{r}
+large_plot_data
+ggsave("large_plot.png", large_plot_data, width = 5, height = 3)
+```
+
+```{r}
+small_plot_data = small_effect %>%  
+mutate(is_congruent = ifelse(is_congruent == 0, "incongruent", "congruent"),
+         prev_congruent = ifelse(prev_congruent == 0, "incongruent", "congruent"),
+         reaction_time = glob_rtm * 1000) %>% 
+  mutate(prev_congruent = factor(prev_congruent, levels=c("congruent","incongruent"))) %>% 
+  ggplot()+
+  aes(y=reaction_time, x=prev_congruent, color=is_congruent, group = is_congruent)+
+  geom_path(linewidth=1.5)+
+  papaja::theme_apa()+
+  geom_point(size=3)+
+  theme(legend.position = "none")
+
+small_plot_data
+ggsave("small_plot.png", small_plot_data, width = 5, height = 3)
+```
+
+```{r}
+no_plot_data = no_effect %>%  
+mutate(is_congruent = ifelse(is_congruent == 0, "incongruent", "congruent"),
+         prev_congruent = ifelse(prev_congruent == 0, "incongruent", "congruent"),
+         reaction_time = glob_rtm * 1000) %>% 
+  mutate(prev_congruent = factor(prev_congruent, levels=c("congruent","incongruent"))) %>% 
+  ggplot()+
+  aes(y=reaction_time, x=prev_congruent, color=is_congruent, group = is_congruent)+
+  geom_path(linewidth=1.5)+
+  papaja::theme_apa()+
+  geom_point(size=3)+
+  theme(legend.position = "none")
+
+no_plot_data
+ggsave("no_plot.png", no_plot_data, width = 5, height = 3)
 ```
 
 

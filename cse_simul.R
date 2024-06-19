@@ -63,14 +63,14 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   
   testdf = testdf %>% 
     left_join(participant_summary, by = c("participant_id", "is_congruent", "prev_congruent")) %>% 
-    mutate(rt_zscore = (rt-participant_mean_rt/participant_sd_rt))
+    mutate(rt_zscore = ((rt-participant_mean_rt)/participant_sd_rt))
   
   testfilter = testdf %>% 
     filter(response == "upper",
            abs(rt_zscore)<sd_filter)
   
   #Fit model with glmer
-  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id), data = testfilter, family = gaussian(link = "log"))
+  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id), data = testfilter, family = inverse.gaussian(link = "log"))
   generalized_big_csemodel_summary = summary(generalized_big_csemodel)
   generalized_big_csemodel_p =generalized_big_csemodel_summary$coefficients[16]
   # Fit model with slope and intercept
