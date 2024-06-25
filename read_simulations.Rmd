@@ -23,6 +23,7 @@ read_csv_with_filename <- function(file) {
 combined_df <- csv_files %>%
   map_dfr(read_csv_with_filename)
 ```
+
 ```{r}
 split_filename <- function(df) {
   df %>%

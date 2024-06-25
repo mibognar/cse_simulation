@@ -36,7 +36,7 @@ diffusion_data <- source_data %>%
 
 ### Generate trials based on model parameters
 testdf = diffusion_data %>%
-  filter(Ter>.1) %>% 
+  mutate(Ter = ifelse(Ter<.1, .1, Ter)) %>% 
   mutate(Result=pmap(
     list(trial_number,
          a=a,
@@ -57,9 +57,29 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   ## Filtering data
   
   participant_summary = testdf %>% 
+    mutate(correct = ifelse(response == "upper", 1, 0)) %>% 
     group_by(participant_id, is_congruent, prev_congruent) %>% 
-    summarize(participant_mean_rt = mean(rt),
-              participant_sd_rt = sd(rt))
+    summarize(N = n(),
+              participant_mean_rt = mean(rt),
+              participant_var_rt = var(rt),
+              participant_sd_rt = sd(rt),
+              participant_correct_percent = mean(correct)) %>% 
+    ungroup()
+  
+  diffusion_parameters = participant_summary %>% 
+    mutate(Result = pmap(list(
+      ifelse(participant_correct_percent==1, 1-1/(N*2),participant_correct_percent),
+      participant_var_rt,
+      participant_mean_rt,
+      s=1),
+      Data2EZ),
+      v = map_dbl(Result, "v"),
+      a = map_dbl(Result, "a"),
+      Ter = map_dbl(Result, "Ter")) %>% 
+    dplyr::select(-Result) %>% 
+    mutate(is_congruent = as.factor(is_congruent),
+           prev_congruent = as.factor(prev_congruent),
+           participant_id = as.factor(participant_id))
   
   testdf = testdf %>% 
     left_join(participant_summary, by = c("participant_id", "is_congruent", "prev_congruent")) %>% 
@@ -70,21 +90,22 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
            abs(rt_zscore)<sd_filter)
   
   #Fit model with glmer
-  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id), data = testfilter, family = inverse.gaussian(link = "log"))
+  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent*prev_congruent|participant_id), data = testfilter, family = inverse.gaussian(link = "log"))
   generalized_big_csemodel_summary = summary(generalized_big_csemodel)
   generalized_big_csemodel_p =generalized_big_csemodel_summary$coefficients[16]
-  # Fit model with slope and intercept
-  big_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent|participant_id),data=testfilter, control = lmerControl(optimizer = "Nelder_Mead"))
-  big_csemodel_summary = summary(big_csemodel)
-  big_csemodel_estimate = big_csemodel_summary$coefficients[4]*1000
-  big_csemodel_p = big_csemodel_summary$coefficients[20]
+  
+  # Fit full linear model 
+  full_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent*prev_congruent | participant_id), data = testfilter, control = lmerControl(optimizer = "nlminbwrap"))
+  full_csemodel_summary = summary(full_csemodel)
+  full_csemodel_estimate = full_csemodel_summary$coefficients[4]*1000
+  full_csemodel_p = full_csemodel_summary$coefficients[20]
   
   # Fit model with  intercept
-  small_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1|participant_id),data=testfilter, control = lmerControl(optimizer = "Nelder_Mead"))
+  small_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1|participant_id),data=testfilter, control = lmerControl(optimizer = "nlminbwrap"))
   small_csemodel_summary = summary(small_csemodel)
   small_csemodel_p = small_csemodel_summary$coefficients[20]
   
-  #Fit ANOVA
+  #Fit ANOVA RT
   anova_summary = testfilter %>% 
     group_by(participant_id, is_congruent, prev_congruent) %>% 
     summarize(mean_rt = mean(rt, na.rm=T)) %>% 
@@ -108,12 +129,22 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   
   cse = (cse_table$`1_0`-cse_table$`1_1`)-(cse_table$`0_0`-cse_table$`0_1`)>0
   anova_p = csenova$ANOVA$p[3]
-  return(c(big_csemodel_estimate,
+  
+  #Fit ANOVA drift rate
+  drift_anova = ezANOVA(data = diffusion_parameters,
+                        dv = v,
+                        wid = participant_id,
+                        within = .(is_congruent, prev_congruent))
+  
+  drift_anova_p = drift_anova$ANOVA$p[3]
+  
+  return(c(full_csemodel_estimate,
            ifelse(cse,generalized_big_csemodel_p<.05, F),
-           ifelse(cse,big_csemodel_p<.05,F),
+           ifelse(cse,full_csemodel_p<.05,F),
            ifelse(cse,small_csemodel_p<.05,F),
-           ifelse(cse,anova_p<.05,F), flag))
-}
+           ifelse(cse,anova_p<.05,F),
+           ifelse(cse, drift_anova_p<.05, F), flag))
+  }
 
 test_sequences = function(effect_table, runs, participants, trials){
   
@@ -139,14 +170,15 @@ test_sequences = function(effect_table, runs, participants, trials){
   nonedf = as.data.frame(do.call(rbind, nonelist))
   
   alldf = rbind(sd2df,sd3df,nonedf)
-  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "anova_p","filtering")
+  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "anova_p","drift_anova_p","filtering")
   
   testsummary = alldf %>%
     group_by(filtering) %>% 
     summarize(glmm_intercept_slope =mean(as.integer(as.logical(gen_slope_p)),na.rm=T),
-              intercept_slope_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
+              full_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
               intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm=T),
-              anova = mean(as.integer(as.logical(anova_p)), na.rm=T))
+              anova_rt = mean(as.integer(as.logical(anova_p)), na.rm=T),
+              anova_dr = mean(as.integer(as.logical(drift_anova_p)), na.rm = T))
   
   return(testsummary)
 }
