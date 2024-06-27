@@ -11,18 +11,26 @@ simulate_data = function(condition_parameters_data, participant_number, trial_nu
 ### Create participants
 source_data = data.frame(participant_id = c(1:participant_number),
                          rt_intercept = rnorm(participant_number, 0, 0.1),
-                         rt_random_slope = rnorm(participant_number, 0, 0.01)) %>% 
+                         congruency_random_slope = rnorm(participant_number, 0, 0.01),
+                         interaction_random_slope = rnorm(participant_number, 0, .005)) %>% 
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each=1, length.out=n())) %>% 
   uncount(2) %>% 
   mutate(prev_congruent = rep(0:1, each=1, length.out=n())) %>% 
   left_join(condition_parameters_data, by=c("is_congruent","prev_congruent")) %>% 
-  mutate(mean_rt = case_when(is_congruent == 1 ~ glob_rtm+rt_intercept-rt_random_slope,
-                             is_congruent == 0 ~ glob_rtm+rt_intercept+rt_random_slope))
+  mutate(congruency_random_slope = case_when(is_congruent == 1 ~ congruency_random_slope,
+                                     T ~ -congruency_random_slope),
+         interaction_random_slope = case_when(
+           is_congruent == 1 & prev_congruent == 1 ~ interaction_random_slope,
+           is_congruent == 1 & prev_congruent == 0 ~ -interaction_random_slope,
+           is_congruent == 0 & prev_congruent == 1 ~ -interaction_random_slope,
+           is_congruent == 0 & prev_congruent == 0 ~ interaction_random_slope,
+           TRUE ~ 0
+         )) %>% 
+  mutate(mean_rt = glob_rtm+rt_intercept + congruency_random_slope + interaction_random_slope)
 
 ### Create diffusion model parameters
 diffusion_data <- source_data %>%
-  #filter(glob_rtc>.5) %>% 
   mutate(Result = pmap(list(
     ifelse(glob_rtc==1, 1-1/(N*2),glob_rtc),
     glob_rtv,
@@ -90,18 +98,18 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
            abs(rt_zscore)<sd_filter)
   
   #Fit model with glmer
-  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent*prev_congruent|participant_id), data = testfilter, family = inverse.gaussian(link = "log"))
+  generalized_big_csemodel = glmer(rt ~ is_congruent*prev_congruent + (1+is_congruent*prev_congruent|participant_id), data = testfilter, family = inverse.gaussian(link = "log"), control = glmerControl(optimizer = "Nelder_Mead"))
   generalized_big_csemodel_summary = summary(generalized_big_csemodel)
   generalized_big_csemodel_p =generalized_big_csemodel_summary$coefficients[16]
   
   # Fit full linear model 
-  full_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent*prev_congruent | participant_id), data = testfilter, control = lmerControl(optimizer = "nlminbwrap"))
+  full_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1+is_congruent*prev_congruent | participant_id), data = testfilter, control = lmerControl(optimizer = "Nelder_Mead"))
   full_csemodel_summary = summary(full_csemodel)
   full_csemodel_estimate = full_csemodel_summary$coefficients[4]*1000
   full_csemodel_p = full_csemodel_summary$coefficients[20]
   
   # Fit model with  intercept
-  small_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1|participant_id),data=testfilter, control = lmerControl(optimizer = "nlminbwrap"))
+  small_csemodel = lmer(rt ~ is_congruent*prev_congruent + (1|participant_id),data=testfilter, control = lmerControl(optimizer = "Nelder_Mead"))
   small_csemodel_summary = summary(small_csemodel)
   small_csemodel_p = small_csemodel_summary$coefficients[20]
   
