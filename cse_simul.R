@@ -1,5 +1,8 @@
 simulate_data = function(condition_parameters_data, participant_number, trial_number){
-  library(tidyverse)
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
   library(EZ2)
   library(fdrtool)
   library(ez)
