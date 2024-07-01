@@ -114,18 +114,9 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   small_csemodel_p = small_csemodel_summary$coefficients[20]
   
   #Fit ANOVA RT
-  anova_summary = testfilter %>% 
-    group_by(participant_id, is_congruent, prev_congruent) %>% 
-    summarize(mean_rt = mean(rt, na.rm=T)) %>% 
-    ungroup() %>% 
-    group_by(participant_id) %>% 
-    filter(n_distinct(is_congruent, prev_congruent)==4) %>% 
-    mutate(is_congruent = as.factor(is_congruent),
-           prev_congruent = as.factor(prev_congruent),
-           participant_id = as.factor(participant_id))
   
-  csenova <- ezANOVA(data = anova_summary,
-                     dv = mean_rt,
+  csenova <- ezANOVA(data = diffusion_parameters,
+                     dv = participant_mean_rt,
                      wid = participant_id,
                      within = .(is_congruent, prev_congruent)
   )
@@ -139,19 +130,35 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   anova_p = csenova$ANOVA$p[3]
   
   #Fit ANOVA drift rate
-  drift_anova = ezANOVA(data = diffusion_parameters,
+  v_anova = ezANOVA(data = diffusion_parameters,
                         dv = v,
                         wid = participant_id,
                         within = .(is_congruent, prev_congruent))
   
-  drift_anova_p = drift_anova$ANOVA$p[3]
+  v_anova_p = v_anova$ANOVA$p[3]
+  
+  a_anova = ezANOVA(data = diffusion_parameters,
+                    dv = a,
+                    wid = participant_id,
+                    within = .(is_congruent, prev_congruent))
+  
+  a_anova_p = a_anova$ANOVA$p[3]
+  
+  Ter_anova = ezANOVA(data = diffusion_parameters,
+                    dv = a,
+                    wid = participant_id,
+                    within = .(is_congruent, prev_congruent))
+  
+  Ter_anova_p = Ter_anova$ANOVA$p[3]
   
   return(c(full_csemodel_estimate,
            ifelse(cse,generalized_big_csemodel_p<.05, F),
            ifelse(cse,full_csemodel_p<.05,F),
            ifelse(cse,small_csemodel_p<.05,F),
            ifelse(cse,anova_p<.05,F),
-           ifelse(cse, drift_anova_p<.05, F), flag))
+           ifelse(cse, v_anova_p<.05, F),
+           ifelse(cse, a_anova_p<.05, F),
+           ifelse(cse, Ter_anova_p<.05, F),flag))
   }
 
 test_sequences = function(effect_table, runs, participants, trials){
@@ -178,15 +185,17 @@ test_sequences = function(effect_table, runs, participants, trials){
   nonedf = as.data.frame(do.call(rbind, nonelist))
   
   alldf = rbind(sd2df,sd3df,nonedf)
-  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "anova_p","drift_anova_p","filtering")
+  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "rt_anova_p","v_anova_p","a_anova_p","Ter_anova_p","filtering")
   
   testsummary = alldf %>%
     group_by(filtering) %>% 
     summarize(glmm_intercept_slope =mean(as.integer(as.logical(gen_slope_p)),na.rm=T),
               full_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
               intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm=T),
-              anova_rt = mean(as.integer(as.logical(anova_p)), na.rm=T),
-              anova_dr = mean(as.integer(as.logical(drift_anova_p)), na.rm = T))
+              anova_rt = mean(as.integer(as.logical(rt_anova_p)), na.rm=T),
+              anova_v = mean(as.integer(as.logical(v_anova_p)), na.rm = T),
+              anova_a = mean(as.integer(as.logical(a_anova_p)), na.rm = T),
+              anova_Ter = mean(as.integer(as.logical(Ter_anova_p)), na.rm = T))
   
   return(testsummary)
 }
