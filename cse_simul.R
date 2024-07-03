@@ -14,8 +14,8 @@ simulate_data = function(condition_parameters_data, participant_number, trial_nu
 ### Create participants
 source_data = data.frame(participant_id = c(1:participant_number),
                          rt_intercept = rnorm(participant_number, 0, 0.1),
-                         congruency_random_slope = rnorm(participant_number, 0, 0.01),
-                         interaction_random_slope = rnorm(participant_number, 0, .005)) %>% 
+                         congruency_random_slope = rnorm(participant_number, 0, .02),
+                         interaction_random_slope = rnorm(participant_number, 0, .01)) %>% 
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each=1, length.out=n())) %>% 
   uncount(2) %>% 
@@ -57,7 +57,6 @@ testdf = diffusion_data %>%
   unnest(Result)
 
 return(testdf)
-
 }
 
 test_simulation = function(condition_parameters_data, participant_number, trial_number, sd_filter, flag) {
