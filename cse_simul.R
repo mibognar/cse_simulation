@@ -11,26 +11,27 @@ simulate_data = function(condition_parameters_data, participant_number, trial_nu
   library(lme4)
   library(lmerTest)
   library(parallel)
+
 ### Create participants
-source_data = data.frame(participant_id = c(1:participant_number),
-                         rt_intercept = rnorm(participant_number, 0, 0.1),
-                         congruency_random_slope = rnorm(participant_number, 0, .02),
-                         interaction_random_slope = rnorm(participant_number, 0, .01)) %>% 
+  source_data = data.frame(participant_id = c(1:participant_number),
+                         rt_intercept = rnorm(participant_number, 0, 0.1), # A 100ms SD random variability in overall RT
+                         congruency_random_slope = rnorm(participant_number, 0, .02), # A 20ms SD noise in congruency effect 
+                         interaction_random_slope = rnorm(participant_number, 0, .01)) %>% # A 10ms SD noise in congruency sequence effect
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each=1, length.out=n())) %>% 
   uncount(2) %>% 
   mutate(prev_congruent = rep(0:1, each=1, length.out=n())) %>% 
-  left_join(condition_parameters_data, by=c("is_congruent","prev_congruent")) %>% 
+  left_join(condition_parameters_data, by=c("is_congruent","prev_congruent")) %>% # Read global condition means based on the input data
   mutate(congruency_random_slope = case_when(is_congruent == 1 ~ congruency_random_slope,
-                                     T ~ -congruency_random_slope),
+                                     T ~ -congruency_random_slope), #  noise depending on current congruency
          interaction_random_slope = case_when(
            is_congruent == 1 & prev_congruent == 1 ~ interaction_random_slope,
            is_congruent == 1 & prev_congruent == 0 ~ -interaction_random_slope,
            is_congruent == 0 & prev_congruent == 1 ~ -interaction_random_slope,
-           is_congruent == 0 & prev_congruent == 0 ~ interaction_random_slope,
+           is_congruent == 0 & prev_congruent == 0 ~ interaction_random_slope, #  noise depending on previous and current congruency condition
            TRUE ~ 0
          )) %>% 
-  mutate(mean_rt = glob_rtm+rt_intercept + congruency_random_slope + interaction_random_slope)
+  mutate(mean_rt = glob_rtm+rt_intercept + congruency_random_slope + interaction_random_slope) # participant conditional RT modulated by systematic noise
 
 ### Create diffusion model parameters
 diffusion_data <- source_data %>%
@@ -131,36 +132,13 @@ test_simulation = function(condition_parameters_data, participant_number, trial_
   cse = (cse_table$`1_0`-cse_table$`1_1`)-(cse_table$`0_0`-cse_table$`0_1`)>0
   anova_p = csenova$ANOVA$p[3]
   
-  #Fit ANOVA drift rate
-  v_anova = ezANOVA(data = diffusion_parameters,
-                        dv = v,
-                        wid = participant_id,
-                        within = .(is_congruent, prev_congruent))
-  
-  v_anova_p = v_anova$ANOVA$p[3]
-  
-  a_anova = ezANOVA(data = diffusion_parameters,
-                    dv = a,
-                    wid = participant_id,
-                    within = .(is_congruent, prev_congruent))
-  
-  a_anova_p = a_anova$ANOVA$p[3]
-  
-  Ter_anova = ezANOVA(data = diffusion_parameters,
-                    dv = a,
-                    wid = participant_id,
-                    within = .(is_congruent, prev_congruent))
-  
-  Ter_anova_p = Ter_anova$ANOVA$p[3]
   
   return(c(full_csemodel_estimate,
            ifelse(cse,generalized_big_csemodel_p<.05, F),
            ifelse(cse,full_csemodel_p<.05,F),
            ifelse(cse,small_csemodel_p<.05,F),
            ifelse(cse,anova_p<.05,F),
-           ifelse(cse, v_anova_p<.05, F),
-           ifelse(cse, a_anova_p<.05, F),
-           ifelse(cse, Ter_anova_p<.05, F),flag))
+           flag))
   }
 
 test_sequences = function(effect_table, runs, participants, trials){
@@ -187,17 +165,15 @@ test_sequences = function(effect_table, runs, participants, trials){
   nonedf = as.data.frame(do.call(rbind, nonelist))
   
   alldf = rbind(sd2df,sd3df,nonedf)
-  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "rt_anova_p","v_anova_p","a_anova_p","Ter_anova_p","filtering")
+  colnames(alldf) = c("estimate","gen_slope_p","slope_p", "intercept_p", "rt_anova_p","filtering")
   
   testsummary = alldf %>%
     group_by(filtering) %>% 
     summarize(glmm_intercept_slope =mean(as.integer(as.logical(gen_slope_p)),na.rm=T),
               full_melr = mean(as.integer(as.logical(slope_p)), na.rm=T),
               intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm=T),
-              anova_rt = mean(as.integer(as.logical(rt_anova_p)), na.rm=T),
-              anova_v = mean(as.integer(as.logical(v_anova_p)), na.rm = T),
-              anova_a = mean(as.integer(as.logical(a_anova_p)), na.rm = T),
-              anova_Ter = mean(as.integer(as.logical(Ter_anova_p)), na.rm = T))
+              anova_rt = mean(as.integer(as.logical(rt_anova_p)), na.rm=T)
+              )
   
   return(testsummary)
 }
