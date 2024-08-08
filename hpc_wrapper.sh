@@ -23,12 +23,12 @@ for ((i=0; i<3; i++)); do
 #SBATCH --output=log_cse_simul_sd_${current_sd}_${current_file}.log
 #SBATCH --error=err_cse_simul_sd_${current_sd}_${current_file}.err
 
-cd /users/pmxtny/cse_simulation
+cd /users/pmxtny/cse_simul
 source /users/pmxtny/.bashrc
 export PATH=/users/pmxtny/local/bin:$PATH
 export LD_LIBRARY_PATH=/users/pmxtny/local/lib:$LD_LIBRARY_PATH
 
-RScript ${current_file} ${runs} ${participants} ${trials_per_condition} ${current_sd}
+Rscript ${current_file} ${runs} ${participants} ${trials_per_condition} ${current_sd}
 EOF
   done
 done
