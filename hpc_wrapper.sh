@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # Array of sd values
-sd_array=([1]=2.5 [2]=3 [3]=1000)
+sd_array=("2.5" "3" "1000")
 file_array=("no_effect_simulation.R" "small_effect_simulation.R" "large_effect_simulation.R")
 runs=100
 participants=200
 trials_per_condition=80
 
 
-for ((i=0; i<3; i++))
-do
+for ((i=0; i<3; i++)); do
+
 	current_sd=${sd_array[i]}
-  for ((j=0; j<3; j++))
-  do
+
+  for ((j=0; j<3; j++)); do
 	  current_file=${file_array[j]}
 	  sbatch << EOF
 #!/bin/bash
@@ -29,6 +29,6 @@ export PATH=/users/pmxtny/local/bin:$PATH
 export LD_LIBRARY_PATH=/users/pmxtny/local/lib:$LD_LIBRARY_PATH
 
 RScript ${current_file} ${runs} ${participants} ${trials_per_condition} ${current_sd}
-
-done
+EOF
+  done
 done
