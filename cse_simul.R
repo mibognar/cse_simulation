@@ -167,7 +167,6 @@ do_test_summary <- function (sequence) {
               intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm = TRUE),
               anova_rt = mean(as.integer(as.logical(rt_anova_p)), na.rm = TRUE)
     )
-  trials_per_condition = $100
   
   return(testsummary)
 
