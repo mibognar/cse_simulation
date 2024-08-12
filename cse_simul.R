@@ -17,7 +17,7 @@ simulate_data <- function(condition_parameters_data, participant_number, trial_n
   source_data <- data.frame(participant_id = c(1:participant_number),
                          rt_intercept = rnorm(participant_number, 0, 0.1), # A 100ms SD random variability in overall RT
                          congruency_random_slope = rnorm(participant_number, 0, .02), # A 20ms SD noise in congruency effect 
-                         interaction_random_slope = rnorm(participant_number, 0, .005)) %>% # A 10ms SD noise in congruency sequence effect
+                         interaction_random_slope = rnorm(participant_number, 0, .015)) %>% # A 10ms SD noise in congruency sequence effect
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each = 1, length.out = n())) %>% 
   uncount(2) %>% 
@@ -112,7 +112,7 @@ test_simulation <- function(condition_parameters_data, participant_number, trial
   full_csemodel_estimate <- full_csemodel_summary$coefficients[4] * 1000
   full_csemodel_p <- full_csemodel_summary$coefficients[20]
   
-  # Fit model with  intercept
+  # Fit model with  intercept only
   small_csemodel <- lmer(rt ~ is_congruent*prev_congruent + (1 | participant_id), data = testfilter, control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
   small_csemodel_summary <- summary(small_csemodel)
   small_csemodel_p <- small_csemodel_summary$coefficients[20]
