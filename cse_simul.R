@@ -17,7 +17,7 @@ simulate_data <- function(condition_parameters_data, participant_number, trial_n
   source_data <- data.frame(participant_id = c(1:participant_number),
                          rt_intercept = rnorm(participant_number, 0, 0.1), # A 100ms SD random variability in overall RT
                          congruency_random_slope = rnorm(participant_number, 0, .02), # A 20ms SD noise in congruency effect 
-                         interaction_random_slope = rnorm(participant_number, 0, .015)) %>% # A 10ms SD noise in congruency sequence effect
+                         interaction_random_slope = rnorm(participant_number, 0, .001)) %>% # A 10ms SD noise in congruency sequence effect
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each = 1, length.out = n())) %>% 
   uncount(2) %>% 
