@@ -1,5 +1,6 @@
 simulate_data <- function(condition_parameters_data, participant_number, trial_number){
   library(readr)
+  library(faux)
   library(dplyr)
   library(tidyr)
   library(purrr)
@@ -14,10 +15,18 @@ simulate_data <- function(condition_parameters_data, participant_number, trial_n
 
   warnings()
 ### Create participants
+## Create covariate random slopes
+  random_slopes = faux::rnorm_multi(n = participant_number,
+                                    mu = 0,                    # means for random effects are always 0  
+                                    sd = c(.02, .005),      # set SDs for random slopes 20ms for congruency effect; 5ms for CSE 
+                                    r = .8,                   # set correlation 
+                                    varnames = c("congruency_random_slope", "interaction_random_slope")  
+  )
+## Create participants
   source_data <- data.frame(participant_id = c(1:participant_number),
-                         rt_intercept = rnorm(participant_number, 0, 0.1), # A 100ms SD random variability in overall RT
-                         congruency_random_slope = rnorm(participant_number, 0, .02), # A 20ms SD noise in congruency effect 
-                         interaction_random_slope = rnorm(participant_number, 0, .001)) %>% # A 10ms SD noise in congruency sequence effect
+                         rt_intercept = rnorm(participant_number, 0, 0.2), # A 200ms SD random variability in overall RT
+                         congruency_random_slope = random_slopes$congruency_random_slope, # A 20ms SD noise in congruency effect 
+                         interaction_random_slope = random_slopes$interaction_random_slope) %>% # A 5ms SD noise in congruency sequence effect
   uncount(2) %>% 
   mutate(is_congruent = rep(0:1, each = 1, length.out = n())) %>% 
   uncount(2) %>% 
