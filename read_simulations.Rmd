@@ -8,7 +8,7 @@ library(tidyverse)
 ```
 
 ```{r}
-directory <- "data/simulated"
+directory <- "data/simulfiles_v5/simulated"
 
 # List all CSV files in the directory
 csv_files <- list.files(path = directory, pattern = "*.csv", full.names = TRUE)
@@ -47,44 +47,62 @@ SD_data = final_df %>%
   group_by(filtering) %>%
   filter(effect != "no_effect") %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(intercept_slope_melr),
+            mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova))
+            mean_anova = mean(anova_rt))
+
+SD_data
+```
 
 
+```{r}
 nofilter_data = final_df %>% 
   group_by(filtering) %>%
   filter(effect == "no_effect") %>% 
-  summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(intercept_slope_melr),
+   summarize(mean_glmm = mean(glmm_intercept_slope),
+            mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova))
+            mean_anova = mean(anova_rt))
 
+nofilter_data
+```
+
+
+```{r}
 smallfilter_data = final_df %>% 
   group_by(filtering) %>%
   filter(effect == "small_effect") %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(intercept_slope_melr),
+            mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova))
+            mean_anova = mean(anova_rt))
+smallfilter_data
+```
 
+
+```{r}
 largefilter_data = final_df %>% 
   group_by(filtering) %>%
   filter(effect == "large_effect") %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(intercept_slope_melr),
+            mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova))
+            mean_anova = mean(anova_rt))
 
+largefilter_data
+```
+
+
+```{r}
 samplefilter_data = final_df %>%
   filter(effect!="no_effect") %>% 
   group_by(as.numeric(participants), as.numeric(trials)) %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(intercept_slope_melr),
+            mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova))
+            mean_anova = mean(anova_rt))
 
 
-
+samplefilter_data
 ```
 

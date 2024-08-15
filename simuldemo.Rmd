@@ -25,12 +25,39 @@ load("large_effect.Rda")
 ```
 
 ```{r}
-sample_data = simulate_data(large_effect, 200, 160)
+sample_data = simulate_data(small_effect, 200, 160)
 
 sample_data%>% ggplot()+
   aes(x=rt) +
   geom_histogram()
 ```
+```{r}
+participant_summary <- sample_data %>% 
+    mutate(correct = ifelse(response == "upper", 1, 0)) %>% 
+    group_by(participant_id, is_congruent, prev_congruent) %>% 
+    summarize(N = n(),
+              participant_mean_rt = mean(rt),
+              participant_var_rt = var(rt),
+              participant_sd_rt = sd(rt),
+              participant_correct_percent = mean(correct)) %>% 
+    ungroup()
+
+testdf <- sample_data %>% 
+    left_join(participant_summary, by = c("participant_id", "is_congruent", "prev_congruent")) %>% 
+    mutate(rt_zscore = ((rt - participant_mean_rt) / participant_sd_rt))
+  
+testfilter <- testdf %>% 
+    filter(response == "upper",
+           abs(rt_zscore) < 100)
+```
+
+```{r}
+full_csemodel <- lmer(rt ~ prev_congruent*is_congruent + (1 + prev_congruent*is_congruent | participant_id), data = testfilter, control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+full_csemodel_summary <- summary(full_csemodel)
+full_csemodel_summary
+  
+```
+
 
 ```{r}
 participant_summary = sample_data %>% 
