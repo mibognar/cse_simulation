@@ -5,10 +5,11 @@ date: "2024-06-11"
 ---
 ```{r}
 library(tidyverse)
+library(ez)
 ```
 
 ```{r}
-directory <- "data/simulfiles_v5/simulated"
+directory <- "data/simulated_v5/simulated"
 
 # List all CSV files in the directory
 csv_files <- list.files(path = directory, pattern = "*.csv", full.names = TRUE)
@@ -44,20 +45,34 @@ final_df <- combined_df %>%
 
 ```{r}
 SD_data = final_df %>% 
-  group_by(filtering) %>%
   filter(effect != "no_effect") %>% 
+  group_by(filtering) %>%
+  mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
             mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt))
+            mean_anova = mean(anova_rt),
+            mean_total = mean(total))
 
 SD_data
+
+SD_data_false = final_df %>% 
+  filter(effect == "no_effect") %>% 
+  group_by(filtering) %>%
+  mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
+  summarize(mean_glmm = mean(glmm_intercept_slope),
+            mean_lmm_slope = mean(full_melr),
+            mean_lmm_intercept = mean(intercept_melr),
+            mean_anova = mean(anova_rt),
+            mean_total = mean(total))
+
+SD_data_false
 ```
 
 
 ```{r}
 nofilter_data = final_df %>% 
-  group_by(filtering) %>%
+  group_by(filtering, participants, trials) %>%
   filter(effect == "no_effect") %>% 
    summarize(mean_glmm = mean(glmm_intercept_slope),
             mean_lmm_slope = mean(full_melr),
@@ -96,7 +111,7 @@ largefilter_data
 ```{r}
 samplefilter_data = final_df %>%
   filter(effect!="no_effect") %>% 
-  group_by(as.numeric(participants), as.numeric(trials)) %>% 
+  #group_by(as.numeric(participants), as.numeric(trials)) %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
             mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
@@ -104,5 +119,29 @@ samplefilter_data = final_df %>%
 
 
 samplefilter_data
+
+samplefilter_data_big = final_df %>% 
+  filter(effect!="no_effect")
+
+interceptmodel = lm(intercept_melr ~ 1, samplefilter_data_big)
+confint(interceptmodel, level = .95)
+```
+
+
+```{r}
+slopemodel = lm(full_melr ~ 1, samplefilter_data_big)
+confint(slopemodel, level = .95)
+```
+
+
+```{r}
+anovamodel = lm(anova_rt ~ 1, samplefilter_data_big)
+confint(anovamodel, level = .95)
+```
+
+
+```{r}
+glmodel = lm(glmm_intercept_slope ~ 1, samplefilter_data_big)
+confint(glmodel, level = .95)
 ```
 
