@@ -70,7 +70,7 @@ testdf <- diffusion_data %>%
 return(testdf)
 }
 
-test_simulation <- function(condition_parameters_data, participant_number, trial_number, sd_filter, flag) {
+test_simulation <- function(condition_parameters_data, participant_number, trial_number, sd_filter, flag, is_debug = F) {
   options(scipen = 999)
   options(dplyr.summarise.inform = FALSE)
   testdf <- simulate_data(condition_parameters_data, participant_number, trial_number)
@@ -143,12 +143,19 @@ test_simulation <- function(condition_parameters_data, participant_number, trial
   anova_p <- csenova$ANOVA$p[3]
   
   
-  return(c(full_csemodel_estimate,
-           ifelse(cse, generalized_big_csemodel_p < .05, FALSE),
-           ifelse(cse,full_csemodel_p < .05, FALSE),
-           ifelse(cse,small_csemodel_p < .05, FALSE),
-           ifelse(cse,anova_p < .05, FALSE),
-           flag))
+  debugsummary = c(csenova$ANOVA,small_csemodel_summary,full_csemodel_summary,generalized_big_csemodel_summary)
+  returnsummary = c(full_csemodel_estimate,
+                    ifelse(cse, generalized_big_csemodel_p < .05, FALSE),
+                    ifelse(cse,full_csemodel_p < .05, FALSE),
+                    ifelse(cse,small_csemodel_p < .05, FALSE),
+                    ifelse(cse,anova_p < .05, FALSE),
+                    flag)
+  
+  if(is_debug == T){
+    return(print(generalized_big_csemodel_summary))
+  }else{
+    return(returnsummary)
+  }
   }
 
 test_sequences <- function(effect_table, runs, participants, trials, sd_filter) {
