@@ -16,7 +16,7 @@ simulate_data <- function(condition_parameters_data, participant_number, trial_n
   warnings()
 ### Create participants
 ## Create covariate random slopes
-  random_slopes = faux::rnorm_multi(n = participant_number,
+  random_slopes = faux::rnorm_multi(n = as.integer(participant_number),
                                     mu = 0,                    # means for random effects are always 0  
                                     sd = c(.02, .005),      # set SDs for random slopes 20ms for congruency effect; 5ms for CSE 
                                     r = .8,                   # set correlation 
