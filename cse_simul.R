@@ -16,7 +16,7 @@ simulate_data <- function(condition_parameters_data, participant_number, trial_n
   warnings()
 ### Create participants
 ## Create covariate random slopes
-  random_slopes = faux::rnorm_multi(n = participant_number,
+  random_slopes = faux::rnorm_multi(n = as.integer(participant_number),
                                     mu = 0,                    # means for random effects are always 0  
                                     sd = c(.02, .005),      # set SDs for random slopes 20ms for congruency effect; 5ms for CSE 
                                     r = .8,                   # set correlation 
@@ -70,7 +70,7 @@ testdf <- diffusion_data %>%
 return(testdf)
 }
 
-test_simulation <- function(condition_parameters_data, participant_number, trial_number, sd_filter, flag) {
+test_simulation <- function(condition_parameters_data, participant_number, trial_number, sd_filter, flag, is_debug = F) {
   options(scipen = 999)
   options(dplyr.summarise.inform = FALSE)
   testdf <- simulate_data(condition_parameters_data, participant_number, trial_number)
@@ -172,7 +172,6 @@ test_simulation <- function(condition_parameters_data, participant_number, trial
   cse <- (cse_table$`1_0` - cse_table$`1_1`) - (cse_table$`0_0` - cse_table$`0_1`) > 0
   anova_p <- csenova$ANOVA$p[3]
   
-  
   return(c(full_csemodel_estimate,
            ifelse(cse, generalized_big_csemodel_p < .05, FALSE),
            ifelse(cse,full_csemodel_p < .05, FALSE),
@@ -183,6 +182,7 @@ test_simulation <- function(condition_parameters_data, participant_number, trial
            full_csemodel$error,
            small_csemodel$error)
          )
+
   }
 
 test_sequences <- function(effect_table, runs, participants, trials, sd_filter) {
