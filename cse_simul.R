@@ -110,20 +110,50 @@ test_simulation <- function(condition_parameters_data, participant_number, trial
     filter(response == "upper",
            abs(rt_zscore) < sd_filter)
   
+  ### To capture convergence errors
+  run_lmer_model = function(formula, data){
+    m <- tryCatch({
+      withCallingHandlers({
+        error <- FALSE
+        list(model = lmer(formula, data = data, control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))),
+             error = error)
+      },warning = function(w) {
+        if(grepl('failed to converge', w$message) || grepl('unidentifiable', w$message)) error <<- TRUE
+      }
+      )})
+    return(m)
+  }
+  
+  run_glmer_model = function(formula, data){
+    m <- tryCatch({
+      withCallingHandlers({
+        error <- FALSE
+        list(model = glmer(formula, data = data, family = inverse.gaussian(link = "log"), control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))),
+             error = error)
+      },warning = function(w) {
+        if(grepl('failed to converge', w$message) || grepl('unidentifiable', w$message)) error <<- TRUE
+      }
+      )})
+    return(m)
+  }
+  
   #Fit model with glmer
-  generalized_big_csemodel <- glmer(rt ~ is_congruent*prev_congruent + (1 + is_congruent * prev_congruent | participant_id), data = testfilter, family = inverse.gaussian(link = "log"), control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
-  generalized_big_csemodel_summary <- summary(generalized_big_csemodel)
+  glmer_formula = rt ~ is_congruent*prev_congruent + (1 + is_congruent * prev_congruent | participant_id)
+  generalized_big_csemodel <- run_glmer_model(glmer_formula, testfilter)
+  generalized_big_csemodel_summary <- summary(generalized_big_csemodel$model)
   generalized_big_csemodel_p <- generalized_big_csemodel_summary$coefficients[16]
   
-  # Fit full linear model 
-  full_csemodel <- lmer(rt ~ is_congruent*prev_congruent + (1 + is_congruent * prev_congruent | participant_id), data = testfilter, control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
-  full_csemodel_summary <- summary(full_csemodel)
+  # Fit full linear model
+  full_lmer_formula = rt ~ is_congruent*prev_congruent + (1 + is_congruent * prev_congruent | participant_id)
+  full_csemodel <- run_lmer_model(full_lmer_formula, testfilter)
+  full_csemodel_summary <- summary(full_csemodel$model)
   full_csemodel_estimate <- full_csemodel_summary$coefficients[4] * 1000
   full_csemodel_p <- full_csemodel_summary$coefficients[20]
   
   # Fit model with  intercept only
-  small_csemodel <- lmer(rt ~ is_congruent*prev_congruent + (1 | participant_id), data = testfilter, control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
-  small_csemodel_summary <- summary(small_csemodel)
+  simple_lmer_formula = rt ~ is_congruent*prev_congruent + (1 | participant_id)
+  small_csemodel <- run_lmer_model(simple_lmer_formula, testfilter)
+  small_csemodel_summary <- summary(small_csemodel$model)
   small_csemodel_p <- small_csemodel_summary$coefficients[20]
   
   #Fit ANOVA RT
@@ -148,7 +178,11 @@ test_simulation <- function(condition_parameters_data, participant_number, trial
            ifelse(cse,full_csemodel_p < .05, FALSE),
            ifelse(cse,small_csemodel_p < .05, FALSE),
            ifelse(cse,anova_p < .05, FALSE),
-           flag))
+           flag,
+           generalized_big_csemodel$error,
+           full_csemodel$error,
+           small_csemodel$error)
+         )
   }
 
 test_sequences <- function(effect_table, runs, participants, trials, sd_filter) {
@@ -167,14 +201,25 @@ test_sequences <- function(effect_table, runs, participants, trials, sd_filter) 
   }
 
 do_test_summary <- function (sequence) {
-  colnames(sequence) <- c("estimate","gen_slope_p","slope_p", "intercept_p", "rt_anova_p","filtering")
+  colnames(sequence) <- c("estimate",
+                          "gen_slope_p",
+                          "slope_p",
+                          "intercept_p",
+                          "rt_anova_p",
+                          "filtering",
+                          "glm_error",
+                          "full_lm_error",
+                          "small_lm_error")
   
   testsummary <- sequence %>%
     group_by(filtering) %>% 
     summarize(glmm_intercept_slope = mean(as.integer(as.logical(gen_slope_p)), na.rm = TRUE),
               full_melr = mean(as.integer(as.logical(slope_p)), na.rm = TRUE),
               intercept_melr = mean(as.integer(as.logical(intercept_p)), na.rm = TRUE),
-              anova_rt = mean(as.integer(as.logical(rt_anova_p)), na.rm = TRUE)
+              anova_rt = mean(as.integer(as.logical(rt_anova_p)), na.rm = TRUE),
+              glm_errors = mean(as.integer(as.logical(glm_error)), na.rm = TRUE),
+              full_lm_errors = mean(as.integer(as.logical(full_lm_error)), na.rm = TRUE),
+              small_lm_errors = mean(as.integer(as.logical(small_lm_error)), na.rm = TRUE)
     )
   
   return(testsummary)
