@@ -6,10 +6,11 @@ date: "2024-06-11"
 ```{r}
 library(tidyverse)
 library(ez)
+library(rempsyc)
 ```
 
 ```{r}
-directory <- "data/simulated_v5/simulated"
+directory <- "data/simulated_v6/simulated"
 
 # List all CSV files in the directory
 csv_files <- list.files(path = directory, pattern = "*.csv", full.names = TRUE)
@@ -52,361 +53,185 @@ SD_data_big %>%
   group_by(filtering) %>% 
   summarize(mean_total = mean(all_tests))
 ```
-
-
 ```{r}
-SD_data_1000 = SD_data_big %>% 
-  filter(filtering == "1000 filter")
-
-model1000 = lm(all_tests ~ 1, data = SD_data_1000)
-confint(model1000, level = .95)
-```
-
-```{r}
-SD_data_25 = SD_data_big %>% 
-  filter(filtering == "2.5 filter")
-
-model25 = lm(all_tests ~ 1, data = SD_data_25)
-confint(model25, level = .95)
-```
-```{r}
-SD_data_3 = SD_data_big %>% 
-  filter(filtering == "3 filter")
-
-model3 = lm(all_tests ~ 1, data = SD_data_3)
-confint(model3, level = .95)
-```
-
-```{r}
-SD_data = final_df %>% 
+models_data = final_df %>% 
   filter(effect != "no_effect") %>% 
   group_by(participants, trials) %>%
   mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
             mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt),
-            mean_total = mean(total))
+            mean_anova = mean(anova_rt)
+            )
 
-SD_data
+models_data = models_data %>% 
+  pivot_longer(cols = starts_with("mean"),
+               names_to = "model",
+               values_to = "TPR")
 ```
 
 
 ```{r}
-SD_data_false = final_df %>% 
+models_data_false = final_df %>% 
   filter(effect == "no_effect") %>% 
-  group_by(filtering) %>%
+  group_by(participants, trials) %>%
   mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
   summarize(mean_glmm = mean(glmm_intercept_slope),
             mean_lmm_slope = mean(full_melr),
             mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt),
-            mean_total_false = mean(total))
+            mean_anova = mean(anova_rt)
+            )
 
-SD_data_false
+models_data_false = models_data_false %>% 
+  pivot_longer(cols = starts_with("mean"),
+               names_to = "model",
+               values_to = "FPR")
 ```
+
+```{r}
+models_data_roc = models_data %>% 
+  left_join(., models_data_false, by=c("participants","trials","model"))
+```
+
+### Plotting ROC data for models
+```{r}
+models_data_roc = models_data_roc[order(models_data_roc$TPR),]
+models_data_roc$FPR <- factor(models_data_roc$FPR, levels = models_data_roc$FPR)
+
+trials80_ROC = models_data_roc %>%
+  filter(trials == 80) %>% 
+  arrange(as.numeric(TPR)) %>% 
+  ggplot(aes(x=FPR, y=TPR, color=model, shape=participants, group=model))+
+  geom_point()+
+  geom_path()+
+  scale_x_continuous(limits = c(0, .15))+
+  scale_y_continuous(limits = c(0, 1))+
+  labs(title = "Model ROC performance on 80 trials / condition",
+       )+
+  scale_color_discrete(name="Model type", labels=c("ANOVA", "GLMM", "Simple LMM", "Complex LMM"))+
+  theme_classic()
+trials80_ROC
+```
+
+```{r}
+trials160_ROC = models_data_roc %>%
+  filter(trials == 160) %>% 
+  arrange(as.numeric(TPR)) %>% 
+  ggplot(aes(x=FPR, y=TPR, color=model, shape=participants, group=model))+
+  geom_point()+
+  geom_path()+
+  scale_x_continuous(limits = c(0, .15))+
+  scale_y_continuous(limits = c(0, 1))+
+  labs(title = "Model ROC performance on 160 trials / condition",
+       )+
+  scale_color_discrete(name="Model type", labels=c("ANOVA", "GLMM", "Simple LMM", "Complex LMM"))+
+  theme_classic()
+
+trials160_ROC
+```
+```{r}
+tpr_data = models_data %>% group_by(model) %>% 
+  summarize(mean_TPR = mean(TPR),
+            sd_TPR = sd(TPR),
+            N = n(),
+            ) %>% 
+  mutate(se_TPR = sd_TPR / sqrt(N),
+         lower = mean_TPR-qt(.975, N-1)*se_TPR,
+          upper = mean_TPR+qt(.975, N-1)*se_TPR)
+```
+
+```{r}
+nice_table(tpr_data)
+```
+
+```{r}
+models_FPR = models_data_false %>% group_by(model) %>% 
+  summarize(mean_FPR = mean(FPR),
+            sd_FPR = sd(FPR),
+            N = n(),
+            ) %>% 
+  mutate(se_FPR = sd_FPR / sqrt(N),
+         lower = mean_FPR-qt(.975, N-1)*se_FPR,
+          upper = mean_FPR+qt(.975, N-1)*se_FPR)
+
+nice_table(models_FPR)
+```
+
+
 ```{r}
 SD_data_false_big = final_df %>% 
   filter(effect == "no_effect") %>% 
-  group_by(filtering) %>%
-  mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4)
+  group_by(filtering, participants, trials) %>%
+  mutate(FPR = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
+  summarize(FPR = mean(FPR))
 
-SD_data_false_1000 = SD_data_false_big %>% 
-  filter(filtering == "1000 filter")
-
-falsemodel1000 = lm(total ~ 1, SD_data_false_1000)
-confint(falsemodel1000, level = .95)
-```
-```{r}
-SD_data_false_3 = SD_data_false_big %>% 
-  filter(filtering == "3 filter")
-
-falsemodel3 = lm(total ~ 1, SD_data_false_3)
-confint(falsemodel3, level = .95)
-```
-```{r}
-SD_data_false_25 = SD_data_false_big %>% 
-  filter(filtering == "2.5 filter")
-
-falsemodel25 = lm(total ~ 1, SD_data_false_25)
-confint(falsemodel25, level = .95)
-```
-
-
-```{r}
-nofilter_data = final_df %>% 
-  group_by(filtering) %>%
-  mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
-  filter(effect == "no_effect") %>% 
-   summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(full_melr),
-            mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt),
-            mean_total_false = mean(total)))
-
-nofilter_data
-```
-```{r}
-nofilter_data_big = final_df %>% 
-  #group_by(filtering) %>%
-  filter(effect == "no_effect")
-
-anova_model = lm(anova_rt ~ 1, data = nofilter_data_big)
-confint(anova_model, level = .95)
-```
-```{r}
-intercept_model = lm(intercept_melr ~ 1, data = nofilter_data_big)
-confint(intercept_model, level = .95)
-```
-```{r}
-slope_model = lm(full_melr ~ 1, data = nofilter_data_big)
-confint(intercept_model, level = .95)
-```
-```{r}
-options(scipen = 999)
-options(dplyr.summarise.inform = FALSE)
-glm_model = lm(glmm_intercept_slope ~ 1, data = nofilter_data_big)
-confint(glm_model, level = .95)
-```
-
-## ROC DATA
-```{r}
-SD_data_false = final_df %>% 
-  filter(effect == "no_effect") %>% 
-  group_by(participants, trials) %>%
-  mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
-  summarize(mean_total_false = mean(total))
-
-SD_data_false
-```
-```{r}
-SD_data_true = final_df %>% 
+SD_data_true_big = final_df %>% 
   filter(effect != "no_effect") %>% 
-  group_by(participants, trials) %>%
-  mutate(total = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
-  summarize(mean_total_true = mean(total))
+  group_by(filtering, participants, trials) %>%
+  mutate(TPR = (glmm_intercept_slope + full_melr + intercept_melr + intercept_melr)/4) %>% 
+  summarize(TPR = mean(TPR))
 
-SD_data_true
-```
-```{r}
-ROC_data = SD_data_true %>% 
-  left_join(., SD_data_false, by=c("participants", "trials"))
-
-ROC_data
-```
-
-```{r}
-library(pROC)
-
-# Combine the true and false scores into one vector
-scores <- c(ROC_data$mean_total_true, ROC_data$mean_total_false)
-
-# Create a vector of labels, 1 for true and 0 for false
-labels <- c(rep(1, nrow(ROC_data)), rep(0, nrow(ROC_data)))
-
-# Calculate the ROC curve
-roc_curve <- roc(labels, scores)
-
-# Convert ROC curve to data frame
-roc_data <- data.frame(
-  tpr = roc_curve$sensitivities,
-  fpr = 1 - roc_curve$specificities,
-  thresholds = roc_curve$thresholds
-)
-```
-```{r}
-roc_data
-```
-
-
-```{r}
-# Plot the ROC curve
-
-roc_data_filtered = roc_data[is.finite(roc_data$thresholds),]
-ggplot(roc_data_filtered, aes(x = fpr, y = tpr)) +
-  geom_line(color = "blue") +
-  geom_abline(linetype = "dashed", color = "red") +
-  labs(
-    title = "ROC Curve",
-    x = "False Positive Rate (1 - Specificity)",
-    y = "True Positive Rate (Sensitivity)"
-  ) +
-  theme_minimal()
-```
-
-```{r}
-intercept_false = final_df %>% 
-  filter(effect == "no_effect") %>% 
-  group_by(participants, trials) %>%
-  summarize(intercept_mean_false = mean(intercept_melr))
-
-intercept_false
-
-intercept_true = final_df %>% 
-  filter(effect != "no_effect") %>% 
-  group_by(participants, trials) %>%
-  summarize(intercept_mean_true = mean(intercept_melr))
-
-intercept_true
-
-ROC_intercept = intercept_true %>% 
-  left_join(., intercept_false, by=c("participants", "trials"))
-
-# Combine the true and false scores into one vector
-scores <- c(ROC_intercept$intercept_mean_true, ROC_intercept$intercept_mean_false)
-
-# Create a vector of labels, 1 for true and 0 for false
-labels <- c(rep(1, nrow(ROC_intercept)), rep(0, nrow(ROC_intercept)))
-
-# Calculate the ROC curve
-roc_curve <- roc(labels, scores)
-
-# Convert ROC curve to data frame
-roc_data <- data.frame(
-  tpr = roc_curve$sensitivities,
-  fpr = 1 - roc_curve$specificities,
-  thresholds = roc_curve$thresholds
-)
-
-# Plot the ROC curve
-ggplot(roc_data, aes(x = fpr, y = tpr)) +
-  geom_line(color = "blue") +
-  geom_abline(linetype = "dashed", color = "red") +  # Line for random guess
-  labs(
-    title = "ROC Curve",
-    x = "False Positive Rate (1 - Specificity)",
-    y = "True Positive Rate (Sensitivity)"
-  ) +
-  theme_minimal()
-```
-```{r}
-glm_false = final_df %>% 
-  filter(effect == "no_effect") %>% 
-  group_by(participants, trials) %>%
-  summarize(glm_mean_false = mean(glmm_intercept_slope))
-
-glm_false
-
-glm_true = final_df %>% 
-  filter(effect != "no_effect") %>% 
-  group_by(participants, trials) %>%
-  summarize(glm_mean_true = mean(glmm_intercept_slope))
-
-glm_true
-
-ROC_glm = glm_true %>% 
-  left_join(., glm_false, by=c("participants", "trials"))
-
-# Combine the true and false scores into one vector
-scores <- c(ROC_glm$glm_mean_true, ROC_glm$glm_mean_false)
-
-# Create a vector of labels, 1 for true and 0 for false
-labels <- c(rep(1, nrow(ROC_glm)), rep(0, nrow(ROC_glm)))
-
-# Calculate the ROC curve
-roc_curve <- roc(labels, scores)
-
-# Convert ROC curve to data frame
-roc_data <- data.frame(
-  tpr = roc_curve$sensitivities,
-  fpr = 1 - roc_curve$specificities,
-  thresholds = roc_curve$thresholds
-)
-
-# Plot the ROC curve
-ggplot(roc_data, aes(x = fpr, y = tpr)) +
-  geom_line(color = "blue") +
-  geom_abline(linetype = "dashed", color = "red") +  # Line for random guess
-  labs(
-    title = "ROC Curve",
-    x = "False Positive Rate (1 - Specificity)",
-    y = "True Positive Rate (Sensitivity)"
-  ) +
-  theme_minimal()
+SD_data_big = SD_data_false_big %>% 
+  left_join(., SD_data_true_big, by = c("filtering","participants","trials"))
 
 
 ```
 
-
-
+### Plotting SD filter data
 ```{r}
-smallfilter_data = final_df %>% 
-  #group_by(filtering) %>%
-  filter(effect == "small_effect") %>% 
-  summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(full_melr),
-            mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt))
-smallfilter_data
+SD_data_80_plot = SD_data_big %>% 
+  filter(trials == 80) %>% 
+  arrange(as.numeric(TPR)) %>% 
+  ggplot(aes(x=FPR, y=TPR, color=filtering, shape=participants, group=filtering))+
+  geom_point()+
+  geom_path()+
+  scale_x_continuous(limits = c(0, .15))+
+  scale_y_continuous(limits = c(0, 1))+
+  labs(title = "SD filtering ROC performance on 80 trials / condition",
+       )+
+  scale_color_discrete(name="Filtering treshold", labels=c("No filter", "2.5SD filter", "3SD filter"))+
+  theme_classic()
 
-smallfilter_big_data = final_df %>% 
-  filter(effect == "small_effect")
+SD_data_80_plot
 
-anova_model = lm(anova_rt ~ 1, data = smallfilter_big_data)
-confint(anova_model, level = .95)
 ```
 ```{r}
-intercept_model = lm(intercept_melr ~ 1, data = smallfilter_big_data)
-confint(intercept_model, level = .95)
+SD_data_160_plot = SD_data_big %>% 
+  filter(trials == 160) %>% 
+  arrange(as.numeric(TPR)) %>% 
+  ggplot(aes(x=FPR, y=TPR, color=filtering, shape=participants, group=filtering))+
+  geom_point()+
+  geom_path()+
+  scale_x_continuous(limits = c(0, .15))+
+  scale_y_continuous(limits = c(0, 1))+
+  labs(title = "SD filtering ROC performance on 160 trials / condition",
+       )+
+  scale_color_discrete(name="Filtering treshold", labels=c("No filter", "2.5SD filter", "3SD filter"))+
+  theme_classic()
+
+SD_data_160_plot
+
+```
+```{r}
+SD_tpr = SD_data_big %>% group_by(filtering) %>% 
+  summarize(mean_TPR = mean(TPR),
+            sd_TPR = sd(TPR),
+            N = n(),
+            ) %>% 
+  mutate(se_TPR = sd_TPR / sqrt(N),
+         lower = mean_TPR-qt(.975, N-1)*se_TPR,
+          upper = mean_TPR+qt(.975, N-1)*se_TPR)
 ```
 
 ```{r}
-slope_model = lm(full_melr ~ 1, data = smallfilter_big_data)
-confint(slope_model, level = .95)
+SD_fpr = SD_data_big %>% group_by(filtering) %>% 
+  summarize(mean_FPR = mean(FPR),
+            sd_FPR = sd(FPR),
+            N = n(),
+            ) %>% 
+  mutate(se_FPR = sd_FPR / sqrt(N),
+         lower = mean_FPR-qt(.975, N-1)*se_FPR,
+          upper = mean_FPR+qt(.975, N-1)*se_FPR)
 ```
 
-```{r}
-glm_model = lm(glmm_intercept_slope ~ 1, data = smallfilter_big_data)
-confint(glm_model, level = .95)
-```
-
-```{r}
-largefilter_data = final_df %>% 
-  group_by(filtering) %>%
-  filter(effect == "large_effect") %>% 
-  summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(full_melr),
-            mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt))
-
-largefilter_data
-```
-
-
-```{r}
-samplefilter_data = final_df %>%
-  filter(effect!="no_effect") %>% 
-  #group_by(as.numeric(participants), as.numeric(trials)) %>% 
-  summarize(mean_glmm = mean(glmm_intercept_slope),
-            mean_lmm_slope = mean(full_melr),
-            mean_lmm_intercept = mean(intercept_melr),
-            mean_anova = mean(anova_rt))
-
-
-samplefilter_data
-
-samplefilter_data_big = final_df %>% 
-  filter(effect!="no_effect")
-
-interceptmodel = lm(intercept_melr ~ 1, samplefilter_data_big)
-confint(interceptmodel, level = .95)
-```
-
-
-```{r}
-slopemodel = lm(full_melr ~ 1, samplefilter_data_big)
-confint(slopemodel, level = .95)
-```
-
-
-```{r}
-anovamodel = lm(anova_rt ~ 1, samplefilter_data_big)
-confint(anovamodel, level = .95)
-```
-
-
-```{r}
-glmodel = lm(glmm_intercept_slope ~ 1, samplefilter_data_big)
-confint(glmodel, level = .95)
-```
 
