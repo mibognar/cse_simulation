@@ -1,4 +1,16 @@
+<<<<<<< HEAD
 #!/usr/bin/env Rscript
+=======
+#!/mnt/st04pool/users/usumusu/local/bin/Rscript
+
+#SBATCH --job-name=model_%j
+#SBATCH --output=output_%j.log
+#SBATCH --error=error_%j.log
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=16G
+#SBATCH --partition=hpc2019
+>>>>>>> 075e5297962df4e60ffb5156253949bc587fb517
 
 # main.R
 # authors: Miklos Bognar & Marton A. Varga
@@ -15,8 +27,17 @@ suppressPackageStartupMessages({
   library(qs)
   library(validate)
 })
+<<<<<<< HEAD
 # Configure SLURM cluster
 
+=======
+
+Sys.setenv(TZ="UTC")
+
+# Configure SLURM cluster
+
+
+>>>>>>> 075e5297962df4e60ffb5156253949bc587fb517
 plan(list(
   tweak(batchtools_slurm, 
         template = "batchtools.slurm.tmpl",
@@ -189,7 +210,11 @@ process_parameter_set <- function(param_set) {
     test_data <- raw_data %>%
       inner_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
       mutate(
+<<<<<<< HEAD
         rt_zscore = (rt - participant_mean_rt) / participant_sd_rt
+=======
+        rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
+>>>>>>> 075e5297962df4e60ffb5156253949bc587fb517
         across(c(is_congruent, prev_congruent, participant_id), as.factor)
       ) %>%
       filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
