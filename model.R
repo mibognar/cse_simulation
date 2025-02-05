@@ -1,16 +1,12 @@
-<<<<<<< HEAD
-#!/usr/bin/env Rscript
-=======
 #!/mnt/st04pool/users/usumusu/local/bin/Rscript
 
-#SBATCH --job-name=model_%j
-#SBATCH --output=output_%j.log
-#SBATCH --error=error_%j.log
+#SBATCH --job-name=model.R
+#SBATCH --output=out_model.log
+#SBATCH --error=error_model.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=16G
 #SBATCH --partition=hpc2019
->>>>>>> 075e5297962df4e60ffb5156253949bc587fb517
 
 # main.R
 # authors: Miklos Bognar & Marton A. Varga
@@ -26,20 +22,17 @@ suppressPackageStartupMessages({
   library(furrr)
   library(qs)
   library(validate)
+  library(futile.logger)
 })
-<<<<<<< HEAD
-# Configure SLURM cluster
 
-=======
-
-Sys.setenv(TZ="UTC")
+Sys.setenv(TZ = "UTC")
+flog.appender(appender.file("model_internal.log"))
 
 # Configure SLURM cluster
 
 
->>>>>>> 075e5297962df4e60ffb5156253949bc587fb517
 plan(list(
-  tweak(batchtools_slurm, 
+  tweak(batchtools_slurm,
         template = "batchtools.slurm.tmpl",
         resources = list(
           memory = 16000,
@@ -65,29 +58,22 @@ load_precomputed_data <- function(param_set) {
     is.character(param_set$id)
   )
   if (any(failing(check))) stop("Invalid parameter set structure")
-  
+
   file_path <- file.path("data/simulated", param_set$effect_size, paste0(param_set$id, ".qs"))
-  
-  # Checksum verification
-  expected_checksum <- qs::qdigest(file_path)
-  actual_checksum <- param_set$checksum
-  
-  if (!is.null(actual_checksum) && actual_checksum != expected_checksum) {
-    stop("Data integrity check failed for ", param_set$id)
-  }
-  
+
+
   qs::qread(file_path, strict = TRUE)
 }
 
 run_model <- function(formula, data, family = NULL) {
-  ctrl <- if(is.null(family)) {
+  ctrl <- if (is.null(family)) {
     lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
   } else {
     glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
   }
-  
+
   result <- tryCatch({
-    model <- if(is.null(family)) {
+    model <- if (is.null(family)) {
       lmer(formula, data, control = ctrl)
     } else {
       glmer(formula, data, family = family, control = ctrl)
@@ -98,7 +84,7 @@ run_model <- function(formula, data, family = NULL) {
 
     list(model = model, error = FALSE)
   }, error = function(e) list(model = NULL, error = TRUE, message = conditionMessage(e)))
-  
+
   return(result)
 }
 
@@ -107,8 +93,9 @@ calculate_cse <- function(data) {
     group_by(prev_congruent, is_congruent) %>%
     summarize(mean_rt = mean(rt, na.rm = TRUE)) %>%
     pivot_wider(
-      names_from = c(prev_congruent, is_congruent), 
-      values_from = mean_rt) %>%
+      names_from = c(prev_congruent, is_congruent),
+      values_from = mean_rt
+    ) %>%
     mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
     pull(cse)
 }
@@ -131,17 +118,17 @@ initialize_checkpoint <- function() {
 
 update_checkpoint <- function(checkpoint, job_id, status) {
   checkpoint$last_updated <- Sys.time()
-  
+
   if (status == "completed") {
     checkpoint$completed_jobs <- union(checkpoint$completed_jobs, job_id)
     checkpoint$failed_jobs[job_id] <- NULL
   } else if (status == "failed") {
     checkpoint$failed_jobs[[job_id]] <- list(
       timestamp = Sys.time(),
-      attempt = length(checkpoint$failed_jobs[[job_id]]$attempts) + 1
+      attempts = length(checkpoint$failed_jobs[[job_id]]$attempts) + 1
     )
   }
-  
+
   qs::qsave(checkpoint, "simulation_checkpoint.qs")
   invisible(checkpoint)
 }
@@ -181,7 +168,8 @@ fit_anova <- function(test_data) {
 
 
 # Simulation workflow -----------------------------------------------------
-process_parameter_set <- function(param_set) {
+process_parameter_set <- function(param_set, checkpoint) {
+  flog.info("Starting job processing for parameter set %s", param_set$id)
   options(scipen = 999)
   options(dplyr.summarise.inform = FALSE)
 
@@ -191,6 +179,8 @@ process_parameter_set <- function(param_set) {
 
   tryCatch({
     raw_data <- load_precomputed_data(param_set)
+    flog.debug("Raw data loaded for %s", param_set$id)
+
     filtered_data <- raw_data %>%
       dtplyr::lazy_dt() %>%
       mutate(
@@ -210,11 +200,7 @@ process_parameter_set <- function(param_set) {
     test_data <- raw_data %>%
       inner_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
       mutate(
-<<<<<<< HEAD
-        rt_zscore = (rt - participant_mean_rt) / participant_sd_rt
-=======
         rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
->>>>>>> 075e5297962df4e60ffb5156253949bc587fb517
         across(c(is_congruent, prev_congruent, participant_id), as.factor)
       ) %>%
       filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
@@ -227,41 +213,41 @@ process_parameter_set <- function(param_set) {
         simple_lmer = fit_simple_lmer,
         anova = fit_anova
       ),
-      ~ future(.x(test_data)), seed = TRUE),
+      ~ future(.x(test_data)),
       .options = furrr_options(seed = TRUE)
     )
-    
+
     results <- list(
       params = param_set,
       models = model_results
     )
 
-  # Save results incrementally
+    flog.info("Models fitted for %s", param_set$id)
+
+    # Save results incrementally
     result_file <- tempfile(pattern = "results_", tmpdir = getwd(), fileext = ".qs")
     qs::qsave(
-      list(params = param_set, models = model_results),
+      list(params = param_set, models = results),
       result_file,
-      preset = "fast",
-      checksum = TRUE
+      preset = "fast"
     )
-    
+
     # Atomic move to final location
     final_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
     file.rename(result_file, final_path)
-    
+
     # Update checkpoint
     update_checkpoint(checkpoint, param_set$id, "completed")
-    
+
   }, error = function(e) {
     update_checkpoint(checkpoint, param_set$id, "failed")
     stop("Error processing ", param_set$id, ": ", e$message)
   })
-  
 }
 
 # Parameter setup ---------------------------------------------------------
 parameter_grid <- expand.grid(
-  effect_size = c("no_effect", "small_effect", "large_effect")
+  effect_size = c("no_effect", "small_effect", "large_effect"),
   sd_filter = c(2.5, 3.0, Inf),
   participants = c(25, 50, 100, 200, 400),
   df_id = 1:1000,
@@ -269,33 +255,36 @@ parameter_grid <- expand.grid(
 ) %>%
   mutate(
     id = paste0(participants, "_", df_id)
-    checksum = map_chr(id, qs::qdigest(file.path("data/simulated", effect_size, paste0(.x, ".qs"))))
   )
 
 
 # Submit jobs -------------------------------------------------------------
 run_jobs <- function() {
+
   checkpoint <- initialize_checkpoint()
-  
+
   # Filter unprocessed jobs
   pending_jobs <- parameter_grid %>%
     filter(!id %in% checkpoint$completed_jobs)
-  
+
   # Process in optimized chunks
   results <- pending_jobs %>%
     future_map(
       ~ tryCatch(
         process_parameter_set(.x, checkpoint),
-        error = function(e) message("Critical error: ", e$message)
+        error = function(e) {
+          message("Critical error: ", e$message)
+          flog.error("Error processing %s: %s", pending_jobs$id, e$message)
+        }
       ),
       .options = furrr_options(
         seed = TRUE,
         scheduling = 8,  # Process 8 jobs per worker
         chunk_size = 100, # Optimized for SLURM array jobs
-        globals = c("checkpoint", "parameter_grid") # Reduce memory overhead
+        globals = c("checkpoint", "pending_jobs", "process_parameter_set") # Reduce memory overhead
       )
     )
-  
+
   # Final checkpoint update
   qs::qsave(checkpoint, "simulation_checkpoint.qs")
 }
