@@ -8,7 +8,7 @@
 #SBATCH --mem=16G
 #SBATCH --partition=hpc2019
 
-# main.R
+# model.R
 # authors: Miklos Bognar & Marton A. Varga
 # affiliations: ELTE Eotvos Lorand University
 # -------------------------------------------------
@@ -21,15 +21,10 @@ suppressPackageStartupMessages({
   library(future.batchtools)
   library(furrr)
   library(qs)
-  library(validate)
-  library(futile.logger)
 })
 
-Sys.setenv(TZ = "UTC")
-flog.appender(appender.file("model_internal.log"))
 
 # Configure SLURM cluster
-
 
 plan(list(
   tweak(batchtools_slurm,
@@ -41,7 +36,7 @@ plan(list(
           work_dir = getwd(),
           chunks.as.array.jobs = TRUE
         )),
-  tweak(multisession, workers = 8)
+  multisession
 ))
 
 # number of cores
@@ -50,18 +45,7 @@ plan(list(
 
 # Helper functions --------------------------------------------------------
 load_precomputed_data <- function(param_set) {
-  # Input validation
-  check <- check_that(param_set,
-    is.character(param_set$effect_size),
-    is.numeric(param_set$sd_filter),
-    is.numeric(param_set$participants),
-    is.character(param_set$id)
-  )
-  if (any(failing(check))) stop("Invalid parameter set structure")
-
   file_path <- file.path("data/simulated", param_set$effect_size, paste0(param_set$id, ".qs"))
-
-
   qs::qread(file_path, strict = TRUE)
 }
 
@@ -79,8 +63,6 @@ run_model <- function(formula, data, family = NULL) {
       glmer(formula, data, family = family, control = ctrl)
     }
 
-    model@frame <- model@frame[0, ]
-    model@resp <- new("glmResp", ...)
 
     list(model = model, error = FALSE)
   }, error = function(e) list(model = NULL, error = TRUE, message = conditionMessage(e)))
@@ -114,6 +96,7 @@ initialize_checkpoint <- function() {
     )
   }
   return(checkpoint)
+  print("initialized checkpoint")
 }
 
 update_checkpoint <- function(checkpoint, job_id, status) {
@@ -137,7 +120,7 @@ update_checkpoint <- function(checkpoint, job_id, status) {
 
 fit_glmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent*prev_congruent + (1 + is_congruent*prev_congruent | participant_id),
+    rt ~ is_congruent * prev_congruent + (1 + is_congruent * prev_congruent | participant_id),
     test_data,
     inverse.gaussian(link = "log")
   )
@@ -145,14 +128,14 @@ fit_glmer <- function(test_data) {
 
 fit_full_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent*prev_congruent + (1 + is_congruent*prev_congruent | participant_id),
+    rt ~ is_congruent * prev_congruent + (1 + is_congruent * prev_congruent | participant_id),
     test_data
   )
 }
 
 fit_simple_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent*prev_congruent + (1 | participant_id),
+    rt ~ is_congruent * prev_congruent + (1 | participant_id),
     test_data
   )
 }
@@ -169,20 +152,17 @@ fit_anova <- function(test_data) {
 
 # Simulation workflow -----------------------------------------------------
 process_parameter_set <- function(param_set, checkpoint) {
-  flog.info("Starting job processing for parameter set %s", param_set$id)
-  options(scipen = 999)
-  options(dplyr.summarise.inform = FALSE)
 
   if (param_set$id %in% checkpoint$completed_jobs) {
     return(invisible())
   }
 
   tryCatch({
-    raw_data <- load_precomputed_data(param_set)
-    flog.debug("Raw data loaded for %s", param_set$id)
+    raw_data <- load_precomputed_data(param_set) %>%
+      unnest(rt)
+
 
     filtered_data <- raw_data %>%
-      dtplyr::lazy_dt() %>%
       mutate(
         correct = as.integer(response == "upper")
       ) %>%
@@ -198,12 +178,15 @@ process_parameter_set <- function(param_set, checkpoint) {
       as_tibble()
 
     test_data <- raw_data %>%
-      inner_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+      left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
       mutate(
         rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
         across(c(is_congruent, prev_congruent, participant_id), as.factor)
       ) %>%
       filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
+
+    print(str(test_data))
+    print(head(test_data))
 
     # Fit models
     model_results <- future_map(
@@ -222,19 +205,19 @@ process_parameter_set <- function(param_set, checkpoint) {
       models = model_results
     )
 
-    flog.info("Models fitted for %s", param_set$id)
 
     # Save results incrementally
-    result_file <- tempfile(pattern = "results_", tmpdir = getwd(), fileext = ".qs")
+    # Atomic move to final location
+    output_dir <- file.path("data/results", param_set$effect_size)
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+    file_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
+
     qs::qsave(
-      list(params = param_set, models = results),
-      result_file,
+      results,
+      file_path,
       preset = "fast"
     )
-
-    # Atomic move to final location
-    final_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
-    file.rename(result_file, final_path)
 
     # Update checkpoint
     update_checkpoint(checkpoint, param_set$id, "completed")
@@ -253,41 +236,41 @@ parameter_grid <- expand.grid(
   df_id = 1:1000,
   stringsAsFactors = FALSE
 ) %>%
+  as_tibble() %>%
   mutate(
-    id = paste0(participants, "_", df_id)
+    id = sprintf("%s_%04d", participants, df_id)
   )
 
-
-# Submit jobs -------------------------------------------------------------
 run_jobs <- function() {
-
   checkpoint <- initialize_checkpoint()
 
   # Filter unprocessed jobs
   pending_jobs <- parameter_grid %>%
     filter(!id %in% checkpoint$completed_jobs)
 
-  # Process in optimized chunks
+  # Check if there are any pending jobs
+  if (nrow(pending_jobs) == 0) {
+    message("No pending jobs to process.")
+    return() # Exit the function if there are no jobs
+  }
+
+  # Process in optimized chunks using future_pmap
   results <- pending_jobs %>%
-    future_map(
-      ~ tryCatch(
-        process_parameter_set(.x, checkpoint),
-        error = function(e) {
-          message("Critical error: ", e$message)
-          flog.error("Error processing %s: %s", pending_jobs$id, e$message)
-        }
-      ),
+    future_pmap(
+      .f = process_parameter_set,
+      param_set = pending_jobs,
+      checkpoint = checkpoint,
       .options = furrr_options(
         seed = TRUE,
         scheduling = 8,  # Process 8 jobs per worker
         chunk_size = 100, # Optimized for SLURM array jobs
-        globals = c("checkpoint", "pending_jobs", "process_parameter_set") # Reduce memory overhead
       )
     )
 
   # Final checkpoint update
   qs::qsave(checkpoint, "simulation_checkpoint.qs")
 }
+
 
 # Main Execution --------------------------------------------------------------
 if (!interactive()) {
