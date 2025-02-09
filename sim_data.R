@@ -49,7 +49,7 @@ initialize_registry <- function() {
 }
 
 load_or_create_registry <- function() {
-  if(file.exists(registry_file)) {
+  if (file.exists(registry_file)) {
     qs::qread(registry_file)
   } else {
     registry <- initialize_registry()
@@ -78,11 +78,11 @@ simulate_data_optimized <- function(condition_parameters_data, participant_numbe
     bind_cols(random_slopes)
 
 
-  expanded_data <- participants %>% 
+  expanded_data <- participants %>%
     expand_grid(
-      is_congruent = 0:1, 
+      is_congruent = 0:1,
       prev_congruent = 0:1
-    ) %>% 
+    ) %>%
     left_join(condition_parameters_data, by = c("is_congruent", "prev_congruent"))
 
   # Compute random slopes and mean RT
@@ -101,7 +101,7 @@ simulate_data_optimized <- function(condition_parameters_data, participant_numbe
 
 # Generate diffusion model parameters using EZ2
 
-  diffusion_data <- processed_data %>% 
+  diffusion_data <- processed_data %>%
     mutate(
       pc = ifelse(glob_rtc == 1, 1 - 1/(participant_number*2), glob_rtc),
       ez_params = future_pmap(list(pc = pc, vrt = glob_rtv, mrt = mean_rt), function(pc, vrt, mrt) {
@@ -120,7 +120,7 @@ simulate_data_optimized <- function(condition_parameters_data, participant_numbe
         ),
         .progress = TRUE
       )
-    ) %>% 
+    ) %>%
     unnest_wider(ez_params)
 
 
@@ -140,9 +140,9 @@ simulate_data_optimized <- function(condition_parameters_data, participant_numbe
   }
 
   trials <- generate_trials_vectorized(
-    diffusion_data$a, 
-    diffusion_data$v, 
-    diffusion_data$Ter, 
+    diffusion_data$a,
+    diffusion_data$v,
+    diffusion_data$Ter,
     trial_number
   )
 
@@ -156,23 +156,23 @@ run_job <- function(effect, n, run) {
     current_status <- job_registry %>%
       filter(effect == !!effect, n == !!n, run == !!run) %>%
       pull(status)
-    
-    if(current_status == "completed") return(TRUE)
-    
+
+    if (current_status == "completed") return(TRUE)
+
     # Generate data
     sim_data <- simulate_data_optimized(
       condition_parameters[[effect]],
       participant_number = n,
       trial_number = trial_number
     )
-    
+
     # Save output
     output_dir <- file.path("data/simulated", effect)
     dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
     file_name <- sprintf("%s_%04d.qs", n, run)
     file_path <- file.path(output_dir, file_name)
     qs::qsave(sim_data, file_path, preset = "fast")
-    
+
     # Update registry
     job_registry <<- job_registry %>%
       mutate(
@@ -189,7 +189,7 @@ run_job <- function(effect, n, run) {
         attempts = attempts + 1L,
         timestamp = Sys.time()
       )
-    
+
     TRUE
   }, error = function(e) {
     # Record error details
@@ -215,13 +215,13 @@ run_job <- function(effect, n, run) {
 # Parallel Execution Controller ------------------------------------------------
 execute_simulations <- function() {
   plan(multisession, workers = num_cores)
-  
+
   # Create job batches for better error handling
   job_batches <- job_registry %>%
     filter(status %in% c("pending", "failed")) %>%
     mutate(batch = (row_number() - 1) %/% 100) %>%
     group_split(batch)
-  
+
   for(batch in job_batches) {
     results <- future_pmap(
       batch %>% select(effect, n, run),
@@ -229,7 +229,7 @@ execute_simulations <- function() {
       .progress = TRUE,
       .options = furrr_options(seed = TRUE)
     )
-    
+
     # Save registry after each batch
     qs::qsave(job_registry, registry_file)
   }
