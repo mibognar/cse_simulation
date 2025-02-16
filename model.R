@@ -17,6 +17,7 @@ suppressPackageStartupMessages({
   library(tidyverse)
   library(lme4)
   library(EZ2)
+  library(ez)
   library(future)
   library(future.batchtools)
   library(furrr)
@@ -39,8 +40,8 @@ plan(list(
   multisession
 ))
 
-# number of cores
-# num_cores <- parallel::detectCores() - 1
+# # number of cores
+# num_cores <- 2
 # plan(multisession, workers = num_cores)
 
 # Helper functions --------------------------------------------------------
@@ -157,75 +158,70 @@ process_parameter_set <- function(param_set, checkpoint) {
     return(invisible())
   }
 
-  tryCatch({
-    raw_data <- load_precomputed_data(param_set) %>%
-      unnest(rt)
+  raw_data <- load_precomputed_data(param_set) %>%
+    unnest(rt)
 
 
-    filtered_data <- raw_data %>%
-      mutate(
-        correct = as.integer(response == "upper")
-      ) %>%
-      group_by(participant_id, is_congruent, prev_congruent) %>%
-      summarise(
-        N = n(),
-        participant_mean_rt = mean(rt),
-        participant_var_rt = var(rt),
-        participant_sd_rt = sd(rt),
-        participant_correct_percent = mean(correct),
-        .groups = "drop"
-      ) %>%
-      as_tibble()
+  filtered_data <- raw_data %>%
+    mutate(
+      correct = as.integer(response == "upper")
+    ) %>%
+    group_by(participant_id, is_congruent, prev_congruent) %>%
+    summarise(
+      N = n(),
+      participant_mean_rt = mean(rt),
+      participant_var_rt = var(rt),
+      participant_sd_rt = sd(rt),
+      participant_correct_percent = mean(correct),
+      .groups = "drop"
+    ) %>%
+    as_tibble()
 
-    test_data <- raw_data %>%
-      left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
-      mutate(
-        rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
-        across(c(is_congruent, prev_congruent, participant_id), as.factor)
-      ) %>%
-      filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
-
-    print(str(test_data))
-    print(head(test_data))
-
-    # Fit models
-    model_results <- future_map(
-      list(
-        glmer = fit_glmer,
-        full_lmer = fit_full_lmer,
-        simple_lmer = fit_simple_lmer,
-        anova = fit_anova
-      ),
-      ~ future(.x(test_data)),
-      .options = furrr_options(seed = TRUE)
-    )
-
-    results <- list(
-      params = param_set,
-      models = model_results
-    )
+  test_data <- raw_data %>%
+    left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+    mutate(
+      rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
+      across(c(is_congruent, prev_congruent, participant_id), as.factor)
+    ) %>%
+    filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
 
 
-    # Save results incrementally
-    # Atomic move to final location
-    output_dir <- file.path("data/results", param_set$effect_size)
-    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  model_functions <- list(
+    glmer = fit_glmer,
+    full_lmer = fit_full_lmer,
+    simple_lmer = fit_simple_lmer,
+    anova = fit_anova
+  )
 
-    file_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
+  # Fit models
+  model_results <- future_map(
+    model_functions,
+    ~ .x(test_data),
+    .options = furrr_options(seed = TRUE)
+  )
 
-    qs::qsave(
-      results,
-      file_path,
-      preset = "fast"
-    )
+  results <- list(
+    params = param_set,
+    models = model_results
+  )
 
-    # Update checkpoint
-    update_checkpoint(checkpoint, param_set$id, "completed")
 
-  }, error = function(e) {
-    update_checkpoint(checkpoint, param_set$id, "failed")
-    stop("Error processing ", param_set$id, ": ", e$message)
-  })
+  output_dir <- file.path("data/results", param_set$effect_size)
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+  file_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
+
+  qs::qsave(
+    results,
+    file_path,
+    preset = "fast"
+  )
+
+  # Update checkpoint
+  update_checkpoint(checkpoint, param_set$id, "completed")
+
+  return(results)
+
 }
 
 # Parameter setup ---------------------------------------------------------
@@ -255,25 +251,24 @@ run_jobs <- function() {
   }
 
   # Process in optimized chunks using future_pmap
-  results <- pending_jobs %>%
-    future_pmap(
-      .f = process_parameter_set,
-      param_set = pending_jobs,
-      checkpoint = checkpoint,
-      .options = furrr_options(
-        seed = TRUE,
-        scheduling = 8,  # Process 8 jobs per worker
-        chunk_size = 100, # Optimized for SLURM array jobs
-      )
+  results <- future_map(
+    .x = seq_len(nrow(pending_jobs)),
+    .f = function(i) {
+      param_row <- pending_jobs[i, ]
+      process_parameter_set(param_row, checkpoint)
+    },
+    .options = furrr_options(
+      seed = TRUE,
+      scheduling = 8,  # Process 8 jobs per worker
+      chunk_size = 100, # Optimized for SLURM array jobs
     )
+  )
 
   # Final checkpoint update
   qs::qsave(checkpoint, "simulation_checkpoint.qs")
 }
 
-
 # Main Execution --------------------------------------------------------------
-if (!interactive()) {
-  run_jobs()
-  message("Simulation completed successfully!")
-}
+run_jobs()
+Sys.sleep(5)
+message("Simulation completed successfully!")
