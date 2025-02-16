@@ -4,8 +4,8 @@
 #SBATCH --output=out_model.log
 #SBATCH --error=error_model.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=54G
 #SBATCH --partition=hpc2019
 
 # model.R
@@ -28,15 +28,18 @@ suppressPackageStartupMessages({
 # Configure SLURM cluster
 
 plan(list(
-  tweak(batchtools_slurm,
-        template = "batchtools.slurm.tmpl",
-        resources = list(
-          memory = 16000,
-          ncpus = 16,
-          partition = "hpc2019",
-          work_dir = getwd(),
-          chunks.as.array.jobs = TRUE
-        )),
+  tweak(
+    batchtools_slurm,
+    template = "batchtools.slurm.tmpl",
+    resources = list(
+      memory = 50000,
+      ncpus = 1,
+      ntasks = 40,
+      partition = "hpc2019",
+      work_dir = getwd(),
+      chunks.as.array.jobs = TRUE
+    )
+  ),
   multisession
 ))
 
@@ -259,7 +262,7 @@ run_jobs <- function() {
     },
     .options = furrr_options(
       seed = TRUE,
-      scheduling = 8,  # Process 8 jobs per worker
+      scheduling = 2,
       chunk_size = 100, # Optimized for SLURM array jobs
     )
   )

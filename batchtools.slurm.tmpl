@@ -5,7 +5,7 @@
 #SBATCH --job-name=<%= job.name %>
 #SBATCH --output=<%= log.file %>
 #SBATCH --error=<%= log.file %>
-#SBATCH --ntasks=1
+#SBATCH --ntasks=<%= resources$ntasks %>
 #SBATCH --cpus-per-task=<%= resources$ncpus %>
 #SBATCH --mem-per-cpu=<%= resources$memory %>
 #SBATCH --partition=<%= resources$partition %>
