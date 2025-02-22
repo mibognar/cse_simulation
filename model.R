@@ -4,8 +4,8 @@
 #SBATCH --output=out_model.log
 #SBATCH --error=error_model.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=54G
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=40G
 #SBATCH --partition=hpc2019
 
 # model.R
@@ -16,6 +16,7 @@
 suppressPackageStartupMessages({
   library(tidyverse)
   library(lme4)
+  library(lmerTest)
   library(EZ2)
   library(ez)
   library(future)
@@ -32,22 +33,20 @@ plan(list(
     batchtools_slurm,
     template = "batchtools.slurm.tmpl",
     resources = list(
-      memory = 50000,
-      ncpus = 1,
-      ntasks = 40,
+      memory = 5000,
+      ncpus = 10,
       partition = "hpc2019",
-      work_dir = getwd(),
-      chunks.as.array.jobs = TRUE
+      work_dir = getwd()
     )
   ),
   multisession
 ))
 
-# # number of cores
-# num_cores <- 2
-# plan(multisession, workers = num_cores)
+options(
+  future.batchtools.output = TRUE,
+  future.debug = TRUE
+)
 
-# Helper functions --------------------------------------------------------
 load_precomputed_data <- function(param_set) {
   file_path <- file.path("data/simulated", param_set$effect_size, paste0(param_set$id, ".qs"))
   qs::qread(file_path, strict = TRUE)
@@ -74,17 +73,17 @@ run_model <- function(formula, data, family = NULL) {
   return(result)
 }
 
-calculate_cse <- function(data) {
-  data %>%
-    group_by(prev_congruent, is_congruent) %>%
-    summarize(mean_rt = mean(rt, na.rm = TRUE)) %>%
-    pivot_wider(
-      names_from = c(prev_congruent, is_congruent),
-      values_from = mean_rt
-    ) %>%
-    mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
-    pull(cse)
-}
+# calculate_cse <- function(data) {
+#   data %>%
+#     group_by(prev_congruent, is_congruent) %>%
+#     summarize(mean_rt = mean(rt, na.rm = TRUE)) %>%
+#     pivot_wider(
+#       names_from = c(prev_congruent, is_congruent),
+#       values_from = mean_rt
+#     ) %>%
+#     mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
+#     pull(cse)
+# }
 
 # Checkpoint System -----------------------------------------------------------
 initialize_checkpoint <- function() {
@@ -100,7 +99,6 @@ initialize_checkpoint <- function() {
     )
   }
   return(checkpoint)
-  print("initialized checkpoint")
 }
 
 update_checkpoint <- function(checkpoint, job_id, status) {
@@ -188,6 +186,9 @@ process_parameter_set <- function(param_set, checkpoint) {
     ) %>%
     filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
 
+  rm(raw_data, filtered_data)
+  gc()
+
 
   model_functions <- list(
     glmer = fit_glmer,
@@ -223,7 +224,8 @@ process_parameter_set <- function(param_set, checkpoint) {
   # Update checkpoint
   update_checkpoint(checkpoint, param_set$id, "completed")
 
-  return(results)
+  rm(results)
+  gc()
 
 }
 
@@ -250,25 +252,26 @@ run_jobs <- function() {
   # Check if there are any pending jobs
   if (nrow(pending_jobs) == 0) {
     message("No pending jobs to process.")
-    return() # Exit the function if there are no jobs
+    return()
   }
 
   # Process in optimized chunks using future_pmap
-  results <- future_map(
+  future_map(
     .x = seq_len(nrow(pending_jobs)),
     .f = function(i) {
       param_row <- pending_jobs[i, ]
       process_parameter_set(param_row, checkpoint)
+
+      rm(param_row)
+      gc()
     },
     .options = furrr_options(
       seed = TRUE,
-      scheduling = 2,
-      chunk_size = 100, # Optimized for SLURM array jobs
     )
   )
 
-  # Final checkpoint update
   qs::qsave(checkpoint, "simulation_checkpoint.qs")
+
 }
 
 # Main Execution --------------------------------------------------------------

@@ -1,11 +1,9 @@
 #!/bin/bash
 
-=======
-#SBATCH --account=usumusu
 #SBATCH --job-name=<%= job.name %>
 #SBATCH --output=<%= log.file %>
 #SBATCH --error=<%= log.file %>
-#SBATCH --ntasks=<%= resources$ntasks %>
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=<%= resources$ncpus %>
 #SBATCH --mem-per-cpu=<%= resources$memory %>
 #SBATCH --partition=<%= resources$partition %>
@@ -15,12 +13,12 @@
 ## - switching to project dir
 ## - setting environment variables
 
+module load slurm
+
 
 # Sourcing the .bashrc file
-source ~/.bashrc
+source /users/usumusu/.bashrc
 
-# Change to the project directory
-cd <%= resources$work_dir %>
 
 # Run R script
 Rscript -e 'batchtools::doJobCollection("<%= uri %>")'

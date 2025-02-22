@@ -17,6 +17,7 @@ library(tidyverse)
 library(broom.mixed)
 library(broom)
 library(lme4)
+library(lmerTest)
 
 f <- qs::qread("data/results/small_effect/25_0001.qs")
 
@@ -75,6 +76,10 @@ process_models <- function(f) {
       TRUE ~ "Proper convergence"
     )
 
+    p_values <- tryCatch({
+      summary(model)$coefficients[,5]
+    }, error = function(e) rep(NA_real_, length(fixef(model))))
+
     list(
       status = case_when(
         !is.null(optinfo$conv$lme4$messages) ~ "Convergence Warnings",
@@ -86,7 +91,8 @@ process_models <- function(f) {
       max_relgrad = grad_metrics$max_relgrad,
       optimizers_converged = allfit_metrics$optimizers_converged,
       max_fe_sd = allfit_metrics$max_fe_sd,
-      verbal = verbal_status
+      verbal = verbal_status,
+      p_values = p_values
     )
   }
 
@@ -124,7 +130,7 @@ process_models <- function(f) {
         AIC = AIC(model_object),
         BIC = BIC(model_object),
         logLik = as.numeric(logLik(model_object)),
-        deviance = deviance(model_object),
+        deviance = deviance(model_object, REML = FALSE),
         convergence_status = convergence$status,
         convergence_messages = convergence$messages,
         max_gradient = convergence$max_gradient,
@@ -136,7 +142,10 @@ process_models <- function(f) {
 
       result %>%
         bind_cols(fitness) %>%
-        bind_cols(broom.mixed::tidy(model_object))
+        bind_cols(broom.mixed::tidy(model_object)) %>%
+        mutate(
+          p.value = convergence$p_values[term]
+        )
 
     } else if ("ANOVA" %in% names(current)) {
       anova_terms <- as_tibble(current$ANOVA) %>%
