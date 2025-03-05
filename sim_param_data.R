@@ -8,25 +8,20 @@
 #SBATCH --mem=50G
 #SBATCH --partition=hpc2019
 
-# model.R
+# sim_param_data.R
 # authors: Miklos Bognar & Marton A. Varga
 # affiliations: ELTE Eotvos Lorand University
 # -------------------------------------------------
 
 # CSE Simulation Pipeline ----------------------------------------------------
 
-library(tibble)
-library(dplyr)
-library(furrr)
-library(future)
-library(EZ2)
-library(rtdists)
-library(purrr)
-library(tidyr)
-library(readr)
-library(lme4)
-library(data.table)
-library(future.apply)
+packages <- c(
+  "tibble", "dplyr", "furrr", "future",
+  "EZ2", "rtdists", "purrr", "tidyr",
+  "readr", "lme4", "data.table", "future.apply", "future.batchtools"
+)
+
+loaded_pkgs <- lapply(packages, library)
 
 
 contrast_data <- function(empirical_data) {
@@ -373,7 +368,7 @@ system.time({
 
   condition_parameters <- list(
     small_effect = estimate_parameters(small_effect),
-    large_effect = estimate_parameters(large_effect)
+    large_effect = estimate_parameters(large_effect),
     no_effect = estimate_null_interaction(small_effect, condition_parameters$small_effect$accuracy_model),
   )
 
@@ -388,9 +383,6 @@ system.time({
 
   # Retry failed jobs (if needed)
   retry_failed_jobs()
-
-
   
-  validation <- validate_simulation(sim_data, empirical_data)
 })
 
