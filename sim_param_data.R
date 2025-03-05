@@ -369,7 +369,11 @@ system.time({
   condition_parameters <- list(
     small_effect = estimate_parameters(small_effect),
     large_effect = estimate_parameters(large_effect),
-    no_effect = estimate_null_interaction(small_effect, condition_parameters$small_effect$accuracy_model),
+  )
+
+  condition_parameters$no_effect <- estimate_null_interaction(
+      small_effect, 
+      condition_parameters$small_effect$accuracy_model
   )
 
   participant_numbers <- c(25, 50, 100, 200, 400)
