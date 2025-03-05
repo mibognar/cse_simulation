@@ -1,0 +1,396 @@
+#!/mnt/st04pool/users/usumusu/local/bin/Rscript
+
+#SBATCH --job-name=sim_param_data.R
+#SBATCH --output=out_sim.log
+#SBATCH --error=error_sim.log
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=50G
+#SBATCH --partition=hpc2019
+
+# model.R
+# authors: Miklos Bognar & Marton A. Varga
+# affiliations: ELTE Eotvos Lorand University
+# -------------------------------------------------
+
+# CSE Simulation Pipeline ----------------------------------------------------
+
+library(tibble)
+library(dplyr)
+library(furrr)
+library(future)
+library(EZ2)
+library(rtdists)
+library(purrr)
+library(tidyr)
+library(readr)
+library(lme4)
+library(data.table)
+library(future.apply)
+
+
+contrast_data <- function(empirical_data) {
+  as.data.table(empirical_data)[
+    , .(participant_id, rt, is_congruent, prev_congruent, correct)
+  ][
+     ,`:=`(
+      is_congruent = as.integer(ifelse(is_congruent == 1, 1, -1)),
+      prev_congruent = as.integer(ifelse(prev_congruent == 1, 1, -1))
+    )
+  ]
+}
+
+estimate_null_interaction <- function(empirical_data, accuracy_model) {
+  cse_model <- lmer(
+    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    data = empirical_data,
+    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+  )
+
+  empirical_data$fitted_values <- fitted(cse_model)
+  empirical_data$residuals <- residuals(cse_model)
+  
+  empirical_data$null_interaction <- sample(empirical_data$is_congruent * empirical_data$prev_congruent)
+  
+  interaction_effect <- fixef(cse_model)["is_congruent:prev_congruent"] * 
+    (empirical_data$is_congruent * empirical_data$prev_congruent)
+  
+  empirical_data$rt_null <- empirical_data$fitted_values - interaction_effect + 
+    (fixef(cse_model)["is_congruent:prev_congruent"] * empirical_data$null_interaction) + 
+    empirical_data$residuals
+  
+  masked_model <- lmer(
+    rt_null ~ is_congruent + is_congruent:prev_congruent + 
+      (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    data = empirical_data,
+    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+  )
+
+
+  rand_eff <- VarCorr(masked_model)[["participant_id"]]
+  rand_eff_cov <- as.matrix(rand_eff)
+  
+  return(list(
+    fixed = fixef(masked_model),
+    residual = sigma(masked_model),
+    vcov = rand_eff_cov,
+    accuracy_model = accuracy_model
+  ))
+}
+
+estimate_parameters <- function(empirical_data) {
+
+  cse_model <- lmer(
+    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    data = empirical_data,
+    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+  )
+
+  rand_eff <- VarCorr(cse_model)[["participant_id"]]
+  rand_eff_cov <- as.matrix(rand_eff)
+
+  accuracy_model <- glmer(
+    correct ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    family = binomial,
+    control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
+    data = empirical_data
+  )
+
+  list(
+    fixed = fixef(cse_model),
+    residual = sigma(cse_model),
+    vcov = rand_eff_cov,
+    accuracy_model = accuracy_model
+  )
+}
+
+
+simulate_cse_responses <- function(n_participants, n_trials, params) {
+  required_params <- c("fixed", "vcov", "residual", "accuracy_model")
+  if (!all(required_params %in% names(params))) {
+    stop("Missing required parameters in 'params' list")
+  }
+
+  simulate_participant <- function(p) {
+
+    participant_re <- MASS::mvrnorm(
+      n = 1,
+      mu = rep(0, nrow(params$vcov)),
+      Sigma = params$vcov
+    )
+
+    rand_eff_acc <- VarCorr(params$accuracy_model)[["participant_id"]]
+    rand_eff_cov_acc <- as.matrix(rand_eff_acc)
+
+    participant_re_acc <- MASS::mvrnorm(
+      n = 1,
+      mu = rep(0, nrow(rand_eff_cov_acc)),
+      Sigma = rand_eff_cov_acc
+    )
+    
+    trials <- tibble(
+      participant_id = as.character(p),
+      trial = 1:n_trials,
+      is_congruent = sample(c(-1, 1), n_trials, replace = TRUE),
+      prev_congruent = lag(is_congruent, default = 1)
+    ) %>%
+      mutate(
+        fixed_effect = as.numeric(
+          params$fixed["(Intercept)"] +
+          params$fixed["is_congruent"] * is_congruent +
+          params$fixed["is_congruent:prev_congruent"] * is_congruent * prev_congruent
+        ),
+        random_effect = as.numeric(
+          participant_re["(Intercept)"] +
+          participant_re["is_congruent"] * is_congruent +
+          participant_re["is_congruent:prev_congruent"] * is_congruent * prev_congruent
+        ),
+        rt = fixed_effect + random_effect + rnorm(n_trials, 0, params$residual)
+      )
+    
+    X <- model.matrix(~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent), data = trials)
+    logit <- X %*% fixef(params$accuracy_model) + 
+             X %*% participant_re_acc
+    trials$correct <- rbinom(n_trials, 1, plogis(logit)) # add 1, 0 correct trials based on model estimate
+    
+    return(trials)
+  }
+
+  results <- future_map_dfr(
+    1:n_participants, 
+    simulate_participant,
+    .options = furrr_options(seed = TRUE)
+  )
+
+  
+  diffusion_data <- results %>%
+    group_by(participant_id) %>%
+    summarise(
+      pc = mean(correct, na.rm = TRUE),
+      vrt = var(rt[correct == 1], na.rm = TRUE),
+      mrt = mean(rt[correct == 1], na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      pc = case_when(
+        pc == 1 ~ 1 - 1/(n_trials + 1),
+        pc == 0 ~ 1/(n_trials + 1),
+        TRUE ~ pc
+      ),
+      vrt = ifelse(is.na(vrt), var(results$rt), vrt),
+      mrt = ifelse(is.na(mrt), mean(results$rt), mrt)
+    ) %>%
+    mutate(
+      ez_params = future_pmap(
+        list(pc, vrt, mrt),
+        function(p, v, m) {
+          tryCatch({
+            res <- EZ2::Data2EZ(Pc = p, VRT = v, MRT = m, s = 1)
+            list(
+              v = res$v,
+              a = res$a,
+              Ter = pmax(res$Ter, 0.01)
+            )
+          }, error = function(e) {
+            message("EZ2 Error: ", e$message, " [Participant: ", pick()$participant_id, "]")
+            list(v = NA_real_, a = NA_real_, Ter = NA_real_)
+          })
+        },
+        .options = furrr_options(globals = "EZ2", packages = "EZ2")
+      )
+    ) %>%
+    unnest_wider(ez_params)
+
+  # Generate diffusion model trials
+  diffusion_trials <- diffusion_data %>%
+    filter(!is.na(v) & !is.na(a) & !is.na(Ter)) %>%
+    group_by(participant_id) %>%
+    mutate(
+      diffusion = future_pmap(
+        list(a, v, Ter),
+        ~ rdiffusion(1, a = .x, v = .y, t0 = ..3)$rt
+      )
+    ) %>%
+    unnest_wider(diffusion, names_sep = "_")
+
+  return(
+    diffusion_trials
+  )
+}
+
+initialize_registry <- function() {
+  expand_grid(
+    effect = names(condition_parameters),
+    n = participant_numbers,
+    run = 1:num_runs
+  ) %>%
+    mutate(
+      status = "pending",
+      file_path = NA_character_,
+      attempts = 0L,
+      last_error = NA_character_,
+      timestamp = Sys.time()
+    )
+}
+
+load_or_create_registry <- function() {
+  if (file.exists(registry_file)) {
+    qs::qread(registry_file)
+  } else {
+    registry <- initialize_registry()
+    qs::qsave(registry, registry_file)
+    registry
+  }
+}
+
+run_job <- function(effect, n, run) {
+  tryCatch({
+    # Check existing status
+    current_status <- job_registry %>%
+      filter(effect == !!effect, n == !!n, run == !!run) %>%
+      pull(status)
+
+    if (current_status == "completed") return(TRUE)
+
+    # Generate data
+    sim_data <- simulate_cse_responses(
+      participant_number = n,
+      trial_number = trial_number,
+      condition_parameters[[effect]]
+    )
+
+    # Save output
+    output_dir <- file.path("data/simulated", effect)
+    dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+    file_name <- sprintf("%s_%04d.qs", n, run)
+    file_path <- file.path(output_dir, file_name)
+    qs::qsave(sim_data, file_path, preset = "fast")
+
+    rm(sim_data)
+    gc()
+
+    # Update registry
+    job_registry <<- job_registry %>%
+      mutate(
+        status = ifelse(
+          effect == !!effect & n == !!n & run == !!run,
+          "completed",
+          status
+        ),
+        file_path = ifelse(
+          effect == !!effect & n == !!n & run == !!run,
+          file_path,
+          file_path
+        ),
+        attempts = attempts + 1L,
+        timestamp = Sys.time()
+      )
+
+    TRUE
+  }, error = function(e) {
+    # Record error details
+    job_registry <<- job_registry %>%
+      mutate(
+        status = ifelse(
+          effect == !!effect & n == !!n & run == !!run,
+          "failed",
+          status
+        ),
+        last_error = ifelse(
+          effect == !!effect & n == !!n & run == !!run,
+          conditionMessage(e),
+          last_error
+        ),
+        attempts = attempts + 1L,
+        timestamp = Sys.time()
+      )
+    FALSE
+  })
+}
+
+execute_simulations <- function() {
+  # Configure SLURM cluster
+  plan(list(
+    tweak(
+      batchtools_slurm,
+      template = "batchtools.slurm.tmpl",
+      resources = list(
+        memory = 6000,
+        ncpus = 10,
+        partition = "hpc2019",
+        work_dir = getwd()
+      )
+    ),
+    multisession
+  ))
+
+options(
+  future.batchtools.output = TRUE,
+)
+  # Create job batches for better error handling
+  job_batches <- job_registry %>%
+    filter(status %in% c("pending", "failed")) %>%
+    mutate(batch = (row_number() - 1) %/% 100) %>%
+    group_split(batch)
+
+  for(batch in job_batches) {
+    results <- future_pmap(
+      batch %>% select(effect, n, run),
+      ~ run_job(..1, ..2, ..3),
+      .progress = TRUE,
+      .options = furrr_options(seed = TRUE)
+    )
+
+    # Save registry after each batch
+    qs::qsave(job_registry, registry_file)
+  }
+}
+
+# Job Recovery and Inspection --------------------------------------------------
+retry_failed_jobs <- function(max_attempts = 3) {
+  job_registry <<- job_registry %>%
+    mutate(
+      status = ifelse(
+        status == "failed" & attempts < max_attempts,
+        "pending",
+        status
+      )
+    )
+  execute_simulations()
+}
+
+
+
+# Configuration ---------------------------------------------------------------
+
+
+system.time({
+  small_effect <- read_csv("./data/empirical/flanker_processed.csv") |>
+    contrast_data()
+
+  large_effect <- read_csv("./data/empirical/primeprobe_processed.csv") |>
+    contrast_data()
+
+  condition_parameters <- list(
+    small_effect = estimate_parameters(small_effect),
+    large_effect = estimate_parameters(large_effect)
+    no_effect = estimate_null_interaction(small_effect, condition_parameters$small_effect$accuracy_model),
+  )
+
+  participant_numbers <- c(25, 50, 100, 200, 400)
+  num_runs <- 1000
+  trial_number <- 100  # Fixed trial count
+  registry_file <- "job_registry.qs"
+
+  job_registry <- load_or_create_registry()
+
+  execute_simulations()
+
+  # Retry failed jobs (if needed)
+  retry_failed_jobs()
+
+
+  
+  validation <- validate_simulation(sim_data, empirical_data)
+})
+
