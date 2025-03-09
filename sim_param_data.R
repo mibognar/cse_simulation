@@ -21,7 +21,7 @@ packages <- c(
   "readr", "lme4", "data.table", "future.apply", "future.batchtools"
 )
 
-loaded_pkgs <- lapply(packages, library)
+loaded_pkgs <- lapply(packages, library, character.only = TRUE)
 
 
 contrast_data <- function(empirical_data) {
@@ -37,7 +37,7 @@ contrast_data <- function(empirical_data) {
 
 estimate_null_interaction <- function(empirical_data, accuracy_model) {
   cse_model <- lmer(
-    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
     control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
   )
@@ -56,7 +56,7 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
   
   masked_model <- lmer(
     rt_null ~ is_congruent + is_congruent:prev_congruent + 
-      (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+      (1 + is_congruent | participant_id),
     data = empirical_data,
     control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
   )
@@ -76,7 +76,7 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
 estimate_parameters <- function(empirical_data) {
 
   cse_model <- lmer(
-    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
     control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
   )
@@ -85,7 +85,7 @@ estimate_parameters <- function(empirical_data) {
   rand_eff_cov <- as.matrix(rand_eff)
 
   accuracy_model <- glmer(
-    correct ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent | participant_id),
+    correct ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
     family = binomial,
     control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
     data = empirical_data
@@ -98,7 +98,6 @@ estimate_parameters <- function(empirical_data) {
     accuracy_model = accuracy_model
   )
 }
-
 
 simulate_cse_responses <- function(n_participants, n_trials, params) {
   required_params <- c("fixed", "vcov", "residual", "accuracy_model")
@@ -137,16 +136,23 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
         ),
         random_effect = as.numeric(
           participant_re["(Intercept)"] +
-          participant_re["is_congruent"] * is_congruent +
-          participant_re["is_congruent:prev_congruent"] * is_congruent * prev_congruent
+          participant_re["is_congruent"] * is_congruent
         ),
+        
         rt = fixed_effect + random_effect + rnorm(n_trials, 0, params$residual)
       )
-    
-    X <- model.matrix(~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent + is_congruent:prev_congruent), data = trials)
-    logit <- X %*% fixef(params$accuracy_model) + 
-             X %*% participant_re_acc
-    trials$correct <- rbinom(n_trials, 1, plogis(logit)) # add 1, 0 correct trials based on model estimate
+
+    X_fixed <- model.matrix(~ is_congruent + is_congruent:prev_congruent, data = trials)
+
+    X_random <- model.matrix(~ is_congruent, data = trials)
+
+    fixed_logit <- X_fixed %*% fixef(params$accuracy_model)
+
+    random_logit <- X_random %*% participant_re_acc
+
+    logit <- fixed_logit + random_logit
+
+    trials$correct <- rbinom(n_trials, 1, plogis(logit))
     
     return(trials)
   }
@@ -159,11 +165,11 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
 
   
   diffusion_data <- results %>%
-    group_by(participant_id) %>%
+    group_by(participant_id, is_congruent, prev_congruent) %>%
     summarise(
       pc = mean(correct, na.rm = TRUE),
-      vrt = var(rt[correct == 1], na.rm = TRUE),
-      mrt = mean(rt[correct == 1], na.rm = TRUE),
+      vrt = var(rt[correct == 1] / 1000, na.rm = TRUE),
+      mrt = mean(rt[correct == 1] / 1000, na.rm = TRUE),
       .groups = "drop"
     ) %>%
     mutate(
@@ -191,25 +197,28 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
             list(v = NA_real_, a = NA_real_, Ter = NA_real_)
           })
         },
-        .options = furrr_options(globals = "EZ2", packages = "EZ2")
+        .options = furrr_options(globals = "EZ2", packages = "EZ2", seed = TRUE)
       )
     ) %>%
     unnest_wider(ez_params)
 
-  # Generate diffusion model trials
-  diffusion_trials <- diffusion_data %>%
-    filter(!is.na(v) & !is.na(a) & !is.na(Ter)) %>%
-    group_by(participant_id) %>%
+
+  final_trials <- results %>%
+    left_join(diffusion_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+    filter(!is.na(v), !is.na(a), !is.na(Ter)) %>% # remove any problematic rows
     mutate(
       diffusion = future_pmap(
         list(a, v, Ter),
-        ~ rdiffusion(1, a = .x, v = .y, t0 = ..3)$rt
+        ~ rdiffusion(n = 1, a = ..1, v = ..2, t0 = ..3),
+        .options = furrr_options(seed = TRUE)
       )
     ) %>%
-    unnest_wider(diffusion, names_sep = "_")
+    unnest_wider(diffusion, names_sep = "_") %>%
+    select(participant_id, trial, is_congruent, prev_congruent,
+           diffusion_rt, diffusion_response)
 
   return(
-    diffusion_trials
+    final_trials
   )
 }
 
@@ -251,7 +260,7 @@ run_job <- function(effect, n, run) {
     sim_data <- simulate_cse_responses(
       participant_number = n,
       trial_number = trial_number,
-      condition_parameters[[effect]]
+      params = condition_parameters[[effect]]
     )
 
     # Save output
@@ -267,12 +276,12 @@ run_job <- function(effect, n, run) {
     # Update registry
     job_registry <<- job_registry %>%
       mutate(
-        status = ifelse(
+        status = if_else(
           effect == !!effect & n == !!n & run == !!run,
           "completed",
           status
         ),
-        file_path = ifelse(
+        file_path = if_else(
           effect == !!effect & n == !!n & run == !!run,
           file_path,
           file_path
@@ -353,10 +362,6 @@ retry_failed_jobs <- function(max_attempts = 3) {
     )
   execute_simulations()
 }
-
-
-
-# Configuration ---------------------------------------------------------------
 
 
 system.time({
