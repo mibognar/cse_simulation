@@ -172,6 +172,8 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
     .options = furrr_options(seed = TRUE)
   )
 
+  epsilon <- .Machine$double.eps^0.5
+
   diffusion_data <- results %>%
     group_by(participant_id, is_congruent, prev_congruent) %>%
     summarise(
@@ -182,8 +184,9 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
     ) %>%
     mutate(
       pc = case_when(
-        pc == 1 ~ 1 - 1 / (n_trials + 1),
-        pc == 0 ~ 1 / (n_trials + 1),
+        pc >= (1 - epsilon) ~ 1 - 1 / (n_trials + 1),
+        pc <= epsilon ~ 1 / (n_trials + 1),
+        abs(pc - 0.5) < epsilon ~ 0.5 + epsilon,
         TRUE ~ pc
       ),
       vrt = ifelse(is.na(vrt), var(results$rt), vrt),
@@ -201,11 +204,11 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
               Ter = pmax(res$Ter, 0.01)
             )
           }, error = function(e) {
-            message("EZ2 Error: ", e$message, " [Participant: ", pick()$participant_id, "]")
+            message("EZ2 Error: ", e$message)
             list(v = NA_real_, a = NA_real_, Ter = NA_real_)
           })
         },
-        .options = furrr_options(globals = "EZ2", packages = "EZ2", seed = TRUE)
+        .options = furrr_options(seed = TRUE)
       )
     ) %>%
     unnest_wider(ez_params)
@@ -293,7 +296,7 @@ execute_simulations <- function(condition_parameters) {
      multisession
   ))
 
-  pending_jobs <-job_registry %>%
+  pending_jobs <- job_registry %>%
     filter(status == "pending") %>%
     select(effect, n, run)
 
