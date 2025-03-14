@@ -206,8 +206,8 @@ process_parameter_set <- function(param_set, checkpoint) {
       participant_var_rt = var(diffusion_rt),
       participant_sd_rt = sd(diffusion_rt),
       participant_correct_percent = mean(correct),
-      participant_media_rt = median(diffusion_rt),
-      participant_mad_rt = mad(diffusion_rt)
+      participant_median_rt = median(diffusion_rt),
+      participant_mad_rt = mad(diffusion_rt),
       .groups = "drop"
     ) %>%
     as_tibble()
@@ -282,7 +282,7 @@ parameter_grid <- expand.grid(
     "sd_2.0", "sd_2.5", "sd_3.0",
     "mad_2.0", "mad_2.5", "mad_3.0",
     "time_1000", "time_1250", "time_1500"
-  )
+  ),
   participants = c(25, 50, 100, 200, 400),
   df_id = 1:1000,
   stringsAsFactors = FALSE
