@@ -52,6 +52,23 @@ load_precomputed_data <- function(param_set) {
   qs::qread(file_path, strict = TRUE)
 }
 
+parse_filter_params <- function(filter_type) {
+  if (filter_type == "no_filter") {
+    return(list(type = "no_filter"))
+  } else if (startsWith(filter_type, "sd_")) {
+    threshold <- as.numeric(sub("sd_", "", filter_type))
+    return(list(type = "sd", threshold = threshold))
+  } else if (startsWith(filter_type, "mad_")) {
+    threshold <- as.numeric(sub("mad_", "", filter_type))
+    return(list(type = "mad", threshold = threshold))
+  } else if (startsWith(filter_type, "time_")) {
+    upper_limit <- as.numeric(sub("time_", "", filter_type))
+    return(list(type = "time", lower = 200, upper = upper_limit))
+  } else {
+    stop("Unknown filter type: ", filter_type)
+  }
+}
+
 run_model <- function(formula, data, family = NULL) {
   ctrl <- if (is.null(family)) {
     lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
@@ -66,8 +83,8 @@ run_model <- function(formula, data, family = NULL) {
       glmer(formula, data, family = family, control = ctrl)
     }
 
-
     list(model = model, error = FALSE)
+
   }, error = function(e) list(model = NULL, error = TRUE, message = conditionMessage(e)))
 
   return(result)
@@ -87,7 +104,7 @@ run_model <- function(formula, data, family = NULL) {
 
 # Checkpoint System -----------------------------------------------------------
 initialize_checkpoint <- function() {
-  checkpoint_file <- "simulation_checkpoint.qs"
+  checkpoint_file <- "model_checkpoint.qs"
   if (file.exists(checkpoint_file)) {
     checkpoint <- qs::qread(checkpoint_file)
   } else {
@@ -114,15 +131,23 @@ update_checkpoint <- function(checkpoint, job_id, status) {
     )
   }
 
-  qs::qsave(checkpoint, "simulation_checkpoint.qs")
+  qs::qsave(checkpoint, "model_checkpoint.qs")
   invisible(checkpoint)
 }
 
 # Model fitting functions -----------------------------------------------------------
 
-fit_glmer <- function(test_data) {
+fit_full_glmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent * prev_congruent + (1 + is_congruent * prev_congruent | participant_id),
+    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
+    test_data,
+    inverse.gaussian(link = "log")
+  )
+}
+
+fit_simple_glmer <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 | participant_id),
     test_data,
     inverse.gaussian(link = "log")
   )
@@ -130,14 +155,14 @@ fit_glmer <- function(test_data) {
 
 fit_full_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent * prev_congruent + (1 + is_congruent * prev_congruent | participant_id),
+    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
     test_data
   )
 }
 
 fit_simple_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent * prev_congruent + (1 | participant_id),
+    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 | participant_id),
     test_data
   )
 }
@@ -151,29 +176,38 @@ fit_anova <- function(test_data) {
   )
 }
 
+fit_null_model <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + (1 + is_congruent | participant_id),
+    test_data
+  )
+}
+
 
 # Simulation workflow -----------------------------------------------------
 process_parameter_set <- function(param_set, checkpoint) {
 
-  if (param_set$id %in% checkpoint$completed_jobs) {
+  if (param_set$job_id %in% checkpoint$completed_jobs) {
     return(invisible())
   }
 
-  raw_data <- load_precomputed_data(param_set) %>%
-    unnest(rt)
+  raw_data <- load_precomputed_data(param_set)
+  filter_params <- parse_filter_params(param_set$filter_type)
 
 
   filtered_data <- raw_data %>%
     mutate(
-      correct = as.integer(response == "upper")
+      correct = as.integer(diffusion_response == "upper")
     ) %>%
     group_by(participant_id, is_congruent, prev_congruent) %>%
     summarise(
       N = n(),
-      participant_mean_rt = mean(rt),
-      participant_var_rt = var(rt),
-      participant_sd_rt = sd(rt),
+      participant_mean_rt = mean(diffusion_rt),
+      participant_var_rt = var(diffusion_rt),
+      participant_sd_rt = sd(diffusion_rt),
       participant_correct_percent = mean(correct),
+      participant_media_rt = median(diffusion_rt),
+      participant_mad_rt = mad(diffusion_rt)
       .groups = "drop"
     ) %>%
     as_tibble()
@@ -181,20 +215,31 @@ process_parameter_set <- function(param_set, checkpoint) {
   test_data <- raw_data %>%
     left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
     mutate(
-      rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
+      rt_zscore = (diffusion_rt - participant_mean_rt) / participant_sd_rt,
+      rt_mad_score = abs(diffusion_rt - participant_median_rt) / participant_mad_rt,
       across(c(is_congruent, prev_congruent, participant_id), as.factor)
     ) %>%
-    filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
+    filter(diffusion_response == "upper")
+
+  if (filter_params$type == "sd") {
+    test_data <- test_data %>% filter(abs(rt_zscore) < filter_params$threshold)
+  } else if (filter_params$type == "mad") {
+    test_data <- test_data %>% filter(rt_mad_score < filter_params$threshold)
+  } else if (filter_params$type == "time") {
+    test_data <- test_data %>% filter(diffusion_rt >= filter_params$lower, diffusion_rt <= filter_params$upper)
+  }
 
   rm(raw_data, filtered_data)
   gc()
 
 
   model_functions <- list(
-    glmer = fit_glmer,
-    full_lmer = fit_full_lmer,
+    simple_glmer = fit_simple_glmer,
+    full_glmer = fit_full_glmer,
     simple_lmer = fit_simple_lmer,
-    anova = fit_anova
+    full_lmer = fit_full_lmer,
+    anova = fit_anova,
+    null_lmer = fit_null_model
   )
 
   # Fit models
@@ -210,10 +255,10 @@ process_parameter_set <- function(param_set, checkpoint) {
   )
 
 
-  output_dir <- file.path("data/results", param_set$effect_size)
+  output_dir <- file.path("data/results", param_set$effect_size, param_set$filter_type)
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
-  file_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
+  file_path <- file.path(output_dir, paste0(param_set$id, ".qs"))
 
   qs::qsave(
     results,
@@ -222,7 +267,7 @@ process_parameter_set <- function(param_set, checkpoint) {
   )
 
   # Update checkpoint
-  update_checkpoint(checkpoint, param_set$id, "completed")
+  update_checkpoint(checkpoint, param_set$job_id, "completed")
 
   rm(results)
   gc()
@@ -232,14 +277,20 @@ process_parameter_set <- function(param_set, checkpoint) {
 # Parameter setup ---------------------------------------------------------
 parameter_grid <- expand.grid(
   effect_size = c("no_effect", "small_effect", "large_effect"),
-  sd_filter = c(2.5, 3.0, Inf),
+  filter_type = c(
+    "no_filter",
+    "sd_2.0", "sd_2.5", "sd_3.0",
+    "mad_2.0", "mad_2.5", "mad_3.0",
+    "time_1000", "time_1250", "time_1500"
+  )
   participants = c(25, 50, 100, 200, 400),
   df_id = 1:1000,
   stringsAsFactors = FALSE
 ) %>%
   as_tibble() %>%
   mutate(
-    id = sprintf("%s_%04d", participants, df_id)
+    id = sprintf("%s_%04d", participants, df_id),
+    job_id = sprintf("%s_%s_%04d", participants, filter_type, df_id)
   )
 
 run_jobs <- function() {
@@ -247,7 +298,7 @@ run_jobs <- function() {
 
   # Filter unprocessed jobs
   pending_jobs <- parameter_grid %>%
-    filter(!id %in% checkpoint$completed_jobs)
+    filter(!job_id %in% checkpoint$completed_jobs)
 
   # Check if there are any pending jobs
   if (nrow(pending_jobs) == 0) {
@@ -270,11 +321,11 @@ run_jobs <- function() {
     )
   )
 
-  qs::qsave(checkpoint, "simulation_checkpoint.qs")
+  qs::qsave(checkpoint, "model_checkpoint.qs")
 
 }
 
 # Main Execution --------------------------------------------------------------
 run_jobs()
 Sys.sleep(5)
-message("Simulation completed successfully!")
+message("Modeling completed successfully!")
