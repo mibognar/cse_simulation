@@ -148,7 +148,7 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
           participant_re["is_congruent"] * is_congruent
         ),
 
-        rt = fixed_effect + random_effect + rnorm(n_trials, 0, params$residual)
+        rt = (fixed_effect + random_effect + rnorm(n_trials, 0, params$residual)) / 1000 # convert to second
       )
 
     x_fixed <- model.matrix(~ is_congruent + is_congruent:prev_congruent, data = trials)
@@ -178,8 +178,8 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
     group_by(participant_id, is_congruent, prev_congruent) %>%
     summarise(
       pc = mean(correct, na.rm = TRUE),
-      vrt = var(rt[correct == 1] / 1000, na.rm = TRUE),
-      mrt = mean(rt[correct == 1] / 1000, na.rm = TRUE),
+      vrt = var(rt[correct == 1], na.rm = TRUE),
+      mrt = mean(rt[correct == 1], na.rm = TRUE),
       .groups = "drop"
     ) %>%
     mutate(
