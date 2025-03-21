@@ -1,8 +1,8 @@
 #!/mnt/st04pool/users/usumusu/local/bin/Rscript
 
 #SBATCH --job-name=sim_param_data.R
-#SBATCH --output=out_sim2.log
-#SBATCH --error=error_sim2.log
+#SBATCH --output=out_sim.log
+#SBATCH --error=error_sim.log
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=50G
@@ -226,6 +226,26 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
     ) %>%
     unnest_wider(diffusion, names_sep = "_") %>%
     select(participant_id, trial, is_congruent, prev_congruent, diffusion_rt, diffusion_response)
+
+
+  uniform_proportion <- 0.05
+  uniform_range <- c(0, 3.09) # Coming from the empirical rt range
+
+  # Generate uniform trials to replace existing ones (5%)
+  uniform_trials <- sample(nrow(final_trials), size = round(nrow(final_trials) * uniform_proportion))
+
+  # Create uniform data for these trials
+  uniform_data <- tibble(
+    participant_id = final_trials$participant_id[uniform_trials],
+    trial = final_trials$trial[uniform_trials],
+    is_congruent = final_trials$is_congruent[uniform_trials],
+    prev_congruent = final_trials$prev_congruent[uniform_trials],
+    diffusion_rt = runif(length(uniform_trials), min = uniform_range[1], max = uniform_range[2]),
+    diffusion_response = final_trials$diffusion_response[uniform_trials]
+  )
+
+  # Replace the selected trials with uniform data
+  final_trials[uniform_trials, ] <- uniform_data
 
   return(final_trials)
 }
