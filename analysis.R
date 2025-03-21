@@ -19,7 +19,7 @@ library(broom)
 library(lme4)
 library(lmerTest)
 
-f <- qs::qread("data/results/small_effect/25_0001.qs")
+f <- qs::qread("data/results/small_effect/sd_3.0/400_0001.qs")
 
 process_models <- function(f) {
   # Enhanced convergence checker with verbal explanations
@@ -38,24 +38,6 @@ process_models <- function(f) {
       )
     }, error = function(e) list(max_gradient = NA_real_, max_relgrad = NA_real_))
 
-    # Multi-optimizer validation
-    allfit_metrics <- tryCatch({
-      if (length(messages) > 0) {
-        af <- allFit(model, verbose = FALSE)
-        converged <- map_lgl(af, ~is.null(.x@optinfo$conv$lme4$messages))
-        if (any(converged)) {
-          fe <- map_df(af[converged], ~as_tibble(t(fixef(.x))))
-          list(
-            optimizers_converged = sum(converged),
-            max_fe_sd = max(map_dbl(fe, sd))
-          )
-        } else {
-          list(optimizers_converged = 0L, max_fe_sd = NA_real_)
-        }
-      } else {
-        list(optimizers_converged = NA_integer_, max_fe_sd = NA_real_)
-      }
-    }, error = function(e) list(optimizers_converged = NA_integer_, max_fe_sd = NA_real_))
 
     # Verbal status generator
     verbal_status <- case_when(
@@ -73,11 +55,11 @@ process_models <- function(f) {
 
       optinfo$conv$opt != 0 ~ "Optimizer failure",
 
-      TRUE ~ "Proper convergence"
+      TRUE ~ "No issue"
     )
 
     p_values <- tryCatch({
-      summary(model)$coefficients[,5]
+      summary(model)$coefficients[,4]
     }, error = function(e) rep(NA_real_, length(fixef(model))))
 
     list(
@@ -147,20 +129,28 @@ process_models <- function(f) {
           p.value = convergence$p_values[term]
         )
 
-    } else if ("ANOVA" %in% names(current)) {
-      anova_terms <- as_tibble(current$ANOVA) %>%
-        rename(term = Effect, p.value = p, statistic = F)
+    } else if ("anova" %in% names(current)) {
 
-      result %>%
-        bind_cols(
-          tibble(
-            term = anova_terms$term,
-            statistic = anova_terms$statistic,
-            p.value = anova_terms$p.value,
-            convergence_status = "N/A",
-            verbal = "Convergence checks not applicable for ANOVA"
-          )
-        )
+      terms <- c()
+      statistics <- c()
+      p_values <- c()
+
+      for (stratum in names(aov_summary)) {
+        stratum_table <- as.data.frame(aov_summary[[stratum]])
+
+        terms <- c(terms, rownames(stratum_table))
+        statistics <- c(statistics, stratum_table[["F value"]])
+        p_values <- c(p_values, stratum_table[["Pr(>F)"]])
+      }
+
+      result <- tibble(
+        term = anova_terms$term,
+        statistic = anova_terms$statistic,
+        p.value = anova_terms$p.value,
+        convergence_status = "N/A",
+        verbal = "Convergence checks not applicable for ANOVA"
+      )
+
     } else {
       result %>%
         mutate(

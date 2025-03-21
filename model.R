@@ -42,10 +42,10 @@ plan(list(
   multisession
 ))
 
-options(
-  future.batchtools.output = TRUE,
-  future.debug = TRUE
-)
+# options(
+#   future.batchtools.output = TRUE,
+#   future.debug = TRUE
+# )
 
 load_precomputed_data <- function(param_set) {
   file_path <- file.path("data/simulated", param_set$effect_size, paste0(param_set$id, ".qs"))
@@ -63,11 +63,50 @@ parse_filter_params <- function(filter_type) {
     return(list(type = "mad", threshold = threshold))
   } else if (startsWith(filter_type, "time_")) {
     upper_limit <- as.numeric(sub("time_", "", filter_type))
-    return(list(type = "time", lower = 200, upper = upper_limit))
+    return(list(type = "time", lower = 0.2, upper = upper_limit))
   } else {
     stop("Unknown filter type: ", filter_type)
   }
 }
+
+ensure_complete_data <- function(data, participant_col, condition_cols) {
+  # Ensure columns are factors
+  data <- data %>%
+    mutate(across(all_of(c(participant_col, condition_cols)), as.factor))
+  
+  # Count observations per participant per condition combination
+  condition_counts <- data %>%
+    group_by(across(all_of(c(participant_col, condition_cols)))) %>%
+    summarise(n = n(), .groups = "drop")
+
+  # Generate all possible combinations of participants and conditions
+  all_combinations <- expand.grid(
+    lapply(data[c(participant_col, condition_cols)], levels)
+  ) %>%
+    as_tibble()
+
+  colnames(all_combinations) <- c(participant_col, condition_cols)
+
+  # Identify missing combinations
+  missing_combinations <- anti_join(all_combinations, condition_counts,
+                                    by = c(participant_col, condition_cols))
+
+  if (nrow(missing_combinations) > 0) {
+    incomplete_participants <- unique(missing_combinations[[participant_col]])
+    message("Removing incomplete participants: ", paste(incomplete_participants, collapse = ", "))
+
+    # Remove incomplete participants
+    data_complete <- data %>%
+      filter(!(!!sym(participant_col) %in% incomplete_participants))
+
+  } else {
+    message("Data is already complete across all conditions.")
+    data_complete <- data
+  }
+
+  return(data_complete)
+}
+
 
 run_model <- function(formula, data, family = NULL) {
   ctrl <- if (is.null(family)) {
@@ -153,6 +192,22 @@ fit_simple_glmer <- function(test_data) {
   )
 }
 
+fit_full_null_glmer <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + (1 + is_congruent | participant_id),
+    test_data,
+    inverse.gaussian(link = "log")
+  )
+}
+
+fit_simple_null_glmer <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + (1 | participant_id),
+    test_data,
+    inverse.gaussian(link = "log")
+  )
+}
+
 fit_full_lmer <- function(test_data) {
   run_model(
     diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
@@ -168,17 +223,35 @@ fit_simple_lmer <- function(test_data) {
 }
 
 fit_anova <- function(test_data) {
-  ezANOVA(
-    data = test_data,
-    dv = participant_mean_rt,
-    wid = participant_id,
-    within = .(is_congruent, prev_congruent)
+  #tryCatch({
+    anova_model <- ezANOVA(
+      data = test_data,
+      dv = .(diffusion_rt),
+      within = .(is_congruent, prev_congruent),
+      wid = .(participant_id),
+      detailed = TRUE
+    )
+
+    list(model = anova_model, error = FALSE)
+  # },
+  #   error = function(e) list(model = NULL, error = TRUE, message = conditionMessage(e))
+  # )
+  # anova_model <- aov(
+  #   diffusion_rt ~ is_congruent * prev_congruent + Error(participant_id / (is_congruent * prev_congruent)),
+  #   data = test_data
+  # )
+}
+
+fit_full_null_lmer <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + (1 + is_congruent | participant_id),
+    test_data
   )
 }
 
-fit_null_model <- function(test_data) {
+fit_simple_null_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + (1 + is_congruent | participant_id),
+    diffusion_rt ~ is_congruent + (1 | participant_id),
     test_data
   )
 }
@@ -205,7 +278,6 @@ process_parameter_set <- function(param_set, checkpoint) {
       participant_mean_rt = mean(diffusion_rt),
       participant_var_rt = var(diffusion_rt),
       participant_sd_rt = sd(diffusion_rt),
-      participant_correct_percent = mean(correct),
       participant_median_rt = median(diffusion_rt),
       participant_mad_rt = mad(diffusion_rt),
       .groups = "drop"
@@ -216,7 +288,6 @@ process_parameter_set <- function(param_set, checkpoint) {
     left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
     mutate(
       rt_zscore = (diffusion_rt - participant_mean_rt) / participant_sd_rt,
-      rt_mad_score = abs(diffusion_rt - participant_median_rt) / participant_mad_rt,
       across(c(is_congruent, prev_congruent, participant_id), as.factor)
     ) %>%
     filter(diffusion_response == "upper")
@@ -224,22 +295,38 @@ process_parameter_set <- function(param_set, checkpoint) {
   if (filter_params$type == "sd") {
     test_data <- test_data %>% filter(abs(rt_zscore) < filter_params$threshold)
   } else if (filter_params$type == "mad") {
-    test_data <- test_data %>% filter(rt_mad_score < filter_params$threshold)
+    test_data <- test_data %>%
+      mutate(
+        lower_bound = participant_median_rt - filter_params$threshold * participant_mad_rt,
+        upper_bound = participant_median_rt + filter_params$threshold * participant_mad_rt
+      ) %>%
+      filter(diffusion_rt >= lower_bound & diffusion_rt <= upper_bound)
   } else if (filter_params$type == "time") {
-    test_data <- test_data %>% filter(diffusion_rt >= filter_params$lower, diffusion_rt <= filter_params$upper)
+    test_data <- test_data %>% filter(diffusion_rt >= filter_params$lower & diffusion_rt <= filter_params$upper)
+  } else if (filter_params$type == "no_filter") {
+    # Do nothing explicitly
   }
+
+  test_data <- ensure_complete_data(
+    data = test_data,
+    participant_col = "participant_id",
+    condition_cols = c("is_congruent", "prev_congruent")
+  )
+
 
   rm(raw_data, filtered_data)
   gc()
 
-
   model_functions <- list(
     simple_glmer = fit_simple_glmer,
     full_glmer = fit_full_glmer,
+    simple_null_glmer = fit_simple_null_glmer,
+    full_null_glmer = fit_full_null_glmer,
     simple_lmer = fit_simple_lmer,
     full_lmer = fit_full_lmer,
-    anova = fit_anova,
-    null_lmer = fit_null_model
+    simple_null_lmer = fit_simple_null_lmer,
+    full_null_lmer = fit_full_null_lmer,
+    anova = fit_anova
   )
 
   # Fit models
@@ -281,7 +368,7 @@ parameter_grid <- expand.grid(
     "no_filter",
     "sd_2.0", "sd_2.5", "sd_3.0",
     "mad_2.0", "mad_2.5", "mad_3.0",
-    "time_1000", "time_1250", "time_1500"
+    "time_1", "time_1.25", "time_1.5"
   ),
   participants = c(25, 50, 100, 200, 400),
   df_id = 1:1000,
@@ -312,6 +399,7 @@ run_jobs <- function() {
     .f = function(i) {
       param_row <- pending_jobs[i, ]
       process_parameter_set(param_row, checkpoint)
+      qs::qsave(checkpoint, "model_checkpoint.qs")
 
       rm(param_row)
       gc()
@@ -320,8 +408,6 @@ run_jobs <- function() {
       seed = TRUE,
     )
   )
-
-  qs::qsave(checkpoint, "model_checkpoint.qs")
 
 }
 
