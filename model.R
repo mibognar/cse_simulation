@@ -42,10 +42,6 @@ plan(list(
   multisession
 ))
 
-# options(
-#   future.batchtools.output = TRUE,
-#   future.debug = TRUE
-# )
 
 load_precomputed_data <- function(param_set) {
   file_path <- file.path("data/simulated", param_set$effect_size, paste0(param_set$id, ".qs"))
@@ -73,7 +69,7 @@ ensure_complete_data <- function(data, participant_col, condition_cols) {
   # Ensure columns are factors
   data <- data %>%
     mutate(across(all_of(c(participant_col, condition_cols)), as.factor))
-  
+
   # Count observations per participant per condition combination
   condition_counts <- data %>%
     group_by(across(all_of(c(participant_col, condition_cols)))) %>%
@@ -88,8 +84,10 @@ ensure_complete_data <- function(data, participant_col, condition_cols) {
   colnames(all_combinations) <- c(participant_col, condition_cols)
 
   # Identify missing combinations
-  missing_combinations <- anti_join(all_combinations, condition_counts,
-                                    by = c(participant_col, condition_cols))
+  missing_combinations <- anti_join(
+    all_combinations, condition_counts,
+    by = c(participant_col, condition_cols)
+  )
 
   if (nrow(missing_combinations) > 0) {
     incomplete_participants <- unique(missing_combinations[[participant_col]])
@@ -97,11 +95,13 @@ ensure_complete_data <- function(data, participant_col, condition_cols) {
 
     # Remove incomplete participants
     data_complete <- data %>%
-      filter(!(!!sym(participant_col) %in% incomplete_participants))
+      filter(!(!!sym(participant_col) %in% incomplete_participants)) %>%
+      mutate(across(all_of(condition_cols), as.numeric))
 
   } else {
     message("Data is already complete across all conditions.")
-    data_complete <- data
+    data_complete <- data %>%
+      mutate(across(all_of(condition_cols), as.numeric))
   }
 
   return(data_complete)
@@ -117,7 +117,7 @@ run_model <- function(formula, data, family = NULL) {
 
   result <- tryCatch({
     model <- if (is.null(family)) {
-      lmer(formula, data, control = ctrl)
+      lmer(formula, data, control = ctrl, REML = FALSE)
     } else {
       glmer(formula, data, family = family, control = ctrl)
     }
@@ -287,8 +287,7 @@ process_parameter_set <- function(param_set, checkpoint) {
   test_data <- raw_data %>%
     left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
     mutate(
-      rt_zscore = (diffusion_rt - participant_mean_rt) / participant_sd_rt,
-      across(c(is_congruent, prev_congruent, participant_id), as.factor)
+      rt_zscore = (diffusion_rt - participant_mean_rt) / participant_sd_rt
     ) %>%
     filter(diffusion_response == "upper")
 

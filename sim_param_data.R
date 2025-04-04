@@ -300,7 +300,7 @@ update_registry <- function(effect, n, run, status, file_path = NA_character_, e
 }
 
 execute_simulations <- function(condition_parameters) {
-  plan(multisession, workers = availableCores() - 2)
+  # plan(multisession, workers = availableCores() - 2)
   # Configure SLURM cluster
   plan(list(
      tweak(
@@ -366,7 +366,7 @@ system.time({
 
   participant_numbers <- c(25, 50, 100, 200, 400)
   num_runs <- 1000
-  trial_number <- 100  # Fixed trial count
+  trial_number <- 400  # Fixed trial count
   registry_file <<- "job_registry.qs"
 
   job_registry <<- load_or_create_registry(registry_file)
