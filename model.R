@@ -68,23 +68,23 @@ parse_filter_params <- function(filter_type) {
 ensure_complete_data <- function(data, participant_col, condition_cols) {
   # Ensure columns are factors
   data <- data %>%
-    mutate(across(all_of(c(participant_col, condition_cols)), as.factor))
+    dplyr::mutate(dplyr::across(tidyselect::all_of(c(participant_col, condition_cols)), as.factor))
 
   # Count observations per participant per condition combination
   condition_counts <- data %>%
-    group_by(across(all_of(c(participant_col, condition_cols)))) %>%
-    summarise(n = n(), .groups = "drop")
+    dplyr::group_by(dplyr::across(tidyselect::all_of(c(participant_col, condition_cols)))) %>%
+    dplyr::summarise(n = dplyr::n(), .groups = "drop")
 
   # Generate all possible combinations of participants and conditions
   all_combinations <- expand.grid(
     lapply(data[c(participant_col, condition_cols)], levels)
   ) %>%
-    as_tibble()
+    tibble::as_tibble()
 
   colnames(all_combinations) <- c(participant_col, condition_cols)
 
   # Identify missing combinations
-  missing_combinations <- anti_join(
+  missing_combinations <- dplyr::anti_join(
     all_combinations, condition_counts,
     by = c(participant_col, condition_cols)
   )
@@ -95,13 +95,13 @@ ensure_complete_data <- function(data, participant_col, condition_cols) {
 
     # Remove incomplete participants
     data_complete <- data %>%
-      filter(!(!!sym(participant_col) %in% incomplete_participants)) %>%
-      mutate(across(all_of(condition_cols), as.numeric))
+      dplyr::filter(!(!!rlang::sym(participant_col) %in% incomplete_participants)) %>%
+      dplyr::mutate(dplyr::across(tidyselect::all_of(condition_cols), as.numeric)) # Switching back to numeric
 
   } else {
-    message("Data is already complete across all conditions.")
+    message("Data is already complete dplyr::across all conditions.")
     data_complete <- data %>%
-      mutate(across(all_of(condition_cols), as.numeric))
+      dplyr::mutate(dplyr::across(tidyselect::all_of(condition_cols), as.numeric)) # Switching back to numeric
   }
 
   return(data_complete)
@@ -131,14 +131,14 @@ run_model <- function(formula, data, family = NULL) {
 
 # calculate_cse <- function(data) {
 #   data %>%
-#     group_by(prev_congruent, is_congruent) %>%
-#     summarize(mean_rt = mean(rt, na.rm = TRUE)) %>%
-#     pivot_wider(
+#     dplyr::group_by(prev_congruent, is_congruent) %>%
+#     dplyr::summarise(mean_rt = mean(rt, na.rm = TRUE)) %>%
+#     tidyr::pivot_wider(
 #       names_from = c(prev_congruent, is_congruent),
 #       values_from = mean_rt
 #     ) %>%
-#     mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
-#     pull(cse)
+#     dplyr::mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
+#     dplyr::pull(cse)
 # }
 
 # Checkpoint System -----------------------------------------------------------
@@ -223,23 +223,15 @@ fit_simple_lmer <- function(test_data) {
 }
 
 fit_anova <- function(test_data) {
-  #tryCatch({
-    anova_model <- ezANOVA(
-      data = test_data,
-      dv = .(diffusion_rt),
-      within = .(is_congruent, prev_congruent),
-      wid = .(participant_id),
-      detailed = TRUE
-    )
+  anova_model <- ezANOVA(
+    data = test_data,
+    dv = .({{ diffusion_rt }}),
+    within = .({{ is_congruent }} , {{ prev_congruent }}),
+    wid = .({{ participant_id }}),
+    detailed = TRUE
+  )
 
-    list(model = anova_model, error = FALSE)
-  # },
-  #   error = function(e) list(model = NULL, error = TRUE, message = conditionMessage(e))
-  # )
-  # anova_model <- aov(
-  #   diffusion_rt ~ is_congruent * prev_congruent + Error(participant_id / (is_congruent * prev_congruent)),
-  #   data = test_data
-  # )
+  list(model = anova_model, error = FALSE)
 }
 
 fit_full_null_lmer <- function(test_data) {
@@ -269,12 +261,12 @@ process_parameter_set <- function(param_set, checkpoint) {
 
 
   filtered_data <- raw_data %>%
-    mutate(
+    dplyr::mutate(
       correct = as.integer(diffusion_response == "upper")
     ) %>%
-    group_by(participant_id, is_congruent, prev_congruent) %>%
-    summarise(
-      N = n(),
+    dplyr::group_by(participant_id, is_congruent, prev_congruent) %>%
+    dplyr::summarise(
+      N = dplyr::n(),
       participant_mean_rt = mean(diffusion_rt),
       participant_var_rt = var(diffusion_rt),
       participant_sd_rt = sd(diffusion_rt),
@@ -282,26 +274,26 @@ process_parameter_set <- function(param_set, checkpoint) {
       participant_mad_rt = mad(diffusion_rt),
       .groups = "drop"
     ) %>%
-    as_tibble()
+    tibble::as_tibble()
 
   test_data <- raw_data %>%
-    left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
-    mutate(
+    dplyr::left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+    dplyr::mutate(
       rt_zscore = (diffusion_rt - participant_mean_rt) / participant_sd_rt
     ) %>%
-    filter(diffusion_response == "upper")
+    dplyr::filter(diffusion_response == "upper", trial != 1) # excluding incorrect and first trials
 
   if (filter_params$type == "sd") {
-    test_data <- test_data %>% filter(abs(rt_zscore) < filter_params$threshold)
+    test_data <- test_data %>% dplyr::filter(abs(rt_zscore) < filter_params$threshold)
   } else if (filter_params$type == "mad") {
     test_data <- test_data %>%
-      mutate(
+      dplyr::mutate(
         lower_bound = participant_median_rt - filter_params$threshold * participant_mad_rt,
         upper_bound = participant_median_rt + filter_params$threshold * participant_mad_rt
       ) %>%
-      filter(diffusion_rt >= lower_bound & diffusion_rt <= upper_bound)
+      dplyr::filter(diffusion_rt >= lower_bound & diffusion_rt <= upper_bound)
   } else if (filter_params$type == "time") {
-    test_data <- test_data %>% filter(diffusion_rt >= filter_params$lower & diffusion_rt <= filter_params$upper)
+    test_data <- test_data %>% dplyr::filter(diffusion_rt >= filter_params$lower & diffusion_rt <= filter_params$upper)
   } else if (filter_params$type == "no_filter") {
     # Do nothing explicitly
   }
@@ -329,7 +321,7 @@ process_parameter_set <- function(param_set, checkpoint) {
   )
 
   # Fit models
-  model_results <- future_map(
+  model_results <- furrr::future_map(
     model_functions,
     ~ .x(test_data),
     .options = furrr_options(seed = TRUE)
@@ -362,7 +354,7 @@ process_parameter_set <- function(param_set, checkpoint) {
 
 # Parameter setup ---------------------------------------------------------
 parameter_grid <- expand.grid(
-  effect_size = c("no_effect", "small_effect", "large_effect"),
+  effect_size = c("small_no_effect", "large_no_effect", "small_effect", "large_effect"),
   filter_type = c(
     "no_filter",
     "sd_2.0", "sd_2.5", "sd_3.0",
@@ -373,8 +365,8 @@ parameter_grid <- expand.grid(
   df_id = 1:1000,
   stringsAsFactors = FALSE
 ) %>%
-  as_tibble() %>%
-  mutate(
+  tibble::as_tibble() %>%
+  dplyr::mutate(
     id = sprintf("%s_%04d", participants, df_id),
     job_id = sprintf("%s_%s_%04d", participants, filter_type, df_id)
   )
@@ -384,7 +376,7 @@ run_jobs <- function() {
 
   # Filter unprocessed jobs
   pending_jobs <- parameter_grid %>%
-    filter(!job_id %in% checkpoint$completed_jobs)
+    dplyr::filter(!job_id %in% checkpoint$completed_jobs)
 
   # Check if there are any pending jobs
   if (nrow(pending_jobs) == 0) {
@@ -393,7 +385,7 @@ run_jobs <- function() {
   }
 
   # Process in optimized chunks using future_pmap
-  future_map(
+  furrr::future_map(
     .x = seq_len(nrow(pending_jobs)),
     .f = function(i) {
       param_row <- pending_jobs[i, ]

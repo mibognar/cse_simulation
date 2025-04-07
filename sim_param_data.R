@@ -19,11 +19,11 @@ packages <- c(
   "tibble", "dplyr", "furrr", "future",
   "EZ2", "rtdists", "purrr", "tidyr",
   "readr", "lme4", "data.table", "future.apply",
-  "future.batchtools", "fs", "Rcpp"
+  "future.batchtools", "fs", "Rcpp", "glue"
 )
 
 loaded_pkgs <- lapply(packages, library, character.only = TRUE)
-sourceCpp("euler_seq.cpp")
+Rcpp::sourceCpp("euler_seq.cpp")
 
 initialize_directories <- function(base_path) {
   fs::dir_create(base_path, recurse = TRUE, mode = "0775")
@@ -79,12 +79,16 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
   rand_eff <- VarCorr(masked_model)[["participant_id"]]
   rand_eff_cov <- as.matrix(rand_eff)
 
-  return(list(
+  params <- list(
     fixed = fixef(masked_model),
     residual = sigma(masked_model),
     vcov = rand_eff_cov,
     accuracy_model = accuracy_model
-  ))
+  )
+
+  qs::qsave(params, glue::glue("data/{as.character(substitute(empirical_data))}_null_params.qs"))
+
+  return(params)
 }
 
 estimate_parameters <- function(empirical_data) {
@@ -106,12 +110,17 @@ estimate_parameters <- function(empirical_data) {
     data = empirical_data
   )
 
-  list(
+  params <- list(
     fixed = fixef(cse_model),
     residual = sigma(cse_model),
     vcov = rand_eff_cov,
     accuracy_model = accuracy_model
   )
+
+
+  qs::qsave(params, glue::glue("data/{as.character(substitute(empirical_data))}_empirical_params.qs"))
+
+  return(params)
 }
 
 simulate_cse_responses <- function(n_participants, n_trials, params) {
@@ -135,22 +144,22 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
       Sigma = rand_eff_cov_acc
     )
 
-    # Asymptotic build towards even trial counts conditions 
+    # Asymptotic build towards even trial counts conditions
     # trials <- tibble(
     #   participant_id = as.character(p),
     #   trial = 1:n_trials,
     #   is_congruent = sample(c(-1, 1), n_trials, replace = TRUE),
     #   prev_congruent = lag(is_congruent, default = 1)
-    # ) %>% 
+    # ) %>%
 
     # Create trials tibble, ensuring equal trial numbers across conditions (n_trials / 4)
-    trials <- tibble(
+    trials <- tibble::tibble(
       participant_id = as.character(p),
       trial = 1:n_trials,
       is_congruent = generate_sequence(n_trials), # fast cpp implementation based on Hierholzer's eulerian circuit algorithm
-      prev_congruent = lag(is_congruent, default = 1)
+      prev_congruent = dplyr::lag(is_congruent, default = 1)
     ) %>%
-      mutate(
+      dplyr::mutate(
         fixed_effect = as.numeric(
           params$fixed["(Intercept)"] +
           params$fixed["is_congruent"] * is_congruent +
@@ -179,7 +188,7 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
     return(trials)
   }
 
-  results <- future_map_dfr(
+  results <- furrr::future_map_dfr(
     1:n_participants,
     simulate_participant,
     .options = furrr_options(seed = TRUE)
@@ -188,15 +197,15 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
   epsilon <- .Machine$double.eps^0.5
 
   diffusion_data <- results %>%
-    group_by(participant_id, is_congruent, prev_congruent) %>%
-    summarise(
+    dplyr::group_by(participant_id, is_congruent, prev_congruent) %>%
+    dplyr::summarise(
       pc = mean(correct, na.rm = TRUE),
       vrt = var(rt[correct == 1], na.rm = TRUE),
       mrt = mean(rt[correct == 1], na.rm = TRUE),
       .groups = "drop"
     ) %>%
-    mutate(
-      pc = case_when(
+    dplyr::mutate(
+      pc = dplyr::case_when(
         pc >= (1 - epsilon) ~ 1 - 1 / (n_trials + 1),
         pc <= epsilon ~ 1 / (n_trials + 1),
         abs(pc - 0.5) < epsilon ~ 0.5 + epsilon,
@@ -205,8 +214,8 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
       vrt = ifelse(is.na(vrt), var(results$rt), vrt),
       mrt = ifelse(is.na(mrt), mean(results$rt), mrt)
     ) %>%
-    mutate(
-      ez_params = future_pmap(
+    dplyr::mutate(
+      ez_params = furrr::future_pmap(
         list(pc, vrt, mrt),
         function(p, v, m) {
           tryCatch({
@@ -224,21 +233,21 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
         .options = furrr_options(seed = TRUE)
       )
     ) %>%
-    unnest_wider(ez_params)
+    tidyr::unnest_wider(ez_params)
 
 
   final_trials <- results %>%
-    left_join(diffusion_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
-    filter(!is.na(v), !is.na(a), !is.na(Ter)) %>% # remove any problematic rows
-    mutate(
-      diffusion = future_pmap(
+    dplyr::left_join(diffusion_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+    dplyr::filter(!is.na(v), !is.na(a), !is.na(Ter)) %>% # remove any problematic rows
+    dplyr::mutate(
+      diffusion = furrr::future_pmap(
         list(a, v, Ter),
-        ~ rdiffusion(n = 1, a = ..1, v = ..2, t0 = ..3),
+        ~ rtdists::rdiffusion(n = 1, a = ..1, v = ..2, t0 = ..3),
         .options = furrr_options(seed = TRUE)
       )
     ) %>%
-    unnest_wider(diffusion, names_sep = "_") %>%
-    select(participant_id, trial, is_congruent, prev_congruent, diffusion_rt, diffusion_response)
+    dplyr::unnest_wider(diffusion, names_sep = "_") %>%
+    dplyr::select(participant_id, trial, is_congruent, prev_congruent, diffusion_rt, diffusion_response)
 
 
   uniform_proportion <- 0.05
@@ -248,7 +257,7 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
   uniform_trials <- sample(nrow(final_trials), size = round(nrow(final_trials) * uniform_proportion))
 
   # Create uniform data for these trials
-  uniform_data <- tibble(
+  uniform_data <- tibble::tibble(
     participant_id = final_trials$participant_id[uniform_trials],
     trial = final_trials$trial[uniform_trials],
     is_congruent = final_trials$is_congruent[uniform_trials],
@@ -279,7 +288,7 @@ initialize_registry <- function() {
     n = participant_numbers,
     run = 1:num_runs
   ) %>%
-    mutate(
+    dplyr::mutate(
       status = "pending",
       file_path = NA_character_,
       attempts = 0L,
@@ -301,12 +310,12 @@ load_or_create_registry <- function(registry_file) {
 
 update_registry <- function(effect, n, run, status, file_path = NA_character_, error_msg = NA_character_) {
   job_registry <<- job_registry %>%
-    mutate(
-      status = if_else(effect == !!effect & n == !!n & run == !!run, status, status),
-      file_path = if_else(effect == !!effect & n == !!n & run == !!run & !is.na(file_path), file_path, file_path),
-      last_error = if_else(effect == !!effect & n == !!n & run == !!run & !is.na(error_msg), error_msg, last_error),
-      attempts = if_else(effect == !!effect & n == !!n & run == !!run, attempts + 1L, attempts),
-      timestamp = if_else(effect == !!effect & n == !!n & run == !!run, Sys.time(), timestamp)
+    dplyr::mutate(
+      status = dplyr::if_else(effect == !!effect & n == !!n & run == !!run, status, status),
+      file_path = dplyr::if_else(effect == !!effect & n == !!n & run == !!run & !is.na(file_path), file_path, file_path),
+      last_error = dplyr::if_else(effect == !!effect & n == !!n & run == !!run & !is.na(error_msg), error_msg, last_error),
+      attempts = dplyr::if_else(effect == !!effect & n == !!n & run == !!run, attempts + 1L, attempts),
+      timestamp = dplyr::if_else(effect == !!effect & n == !!n & run == !!run, Sys.time(), timestamp)
     )
 
   qs::qsave(job_registry, registry_file)
@@ -329,15 +338,15 @@ execute_simulations <- function(condition_parameters) {
   ))
 
   pending_jobs <- job_registry %>%
-    filter(status == "pending") %>%
-    select(effect, n, run)
+    dplyr::filter(status == "pending") %>%
+    dplyr::select(effect, n, run)
 
   if (nrow(pending_jobs) == 0) {
     message("No pending jobs found.")
     return(NULL)
   }
 
-  future_pwalk(
+  furrr::future_pwalk(
     .l = pending_jobs,
     .f = function(effect, n, run, ...) {
       tryCatch({
@@ -360,10 +369,10 @@ execute_simulations <- function(condition_parameters) {
 
 
 system.time({
-  small_effect <- read_csv("./data/empirical/flanker_processed.csv") |>
+  small_effect <- readr::read_csv("./data/empirical/flanker_processed.csv") |>
     contrast_data()
 
-  large_effect <- read_csv("./data/empirical/primeprobe_processed.csv") |>
+  large_effect <- readr::read_csv("./data/empirical/primeprobe_processed.csv") |>
     contrast_data()
 
   condition_parameters <- list(
