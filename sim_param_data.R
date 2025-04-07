@@ -19,10 +19,11 @@ packages <- c(
   "tibble", "dplyr", "furrr", "future",
   "EZ2", "rtdists", "purrr", "tidyr",
   "readr", "lme4", "data.table", "future.apply",
-  "future.batchtools", "fs"
+  "future.batchtools", "fs", "Rcpp"
 )
 
 loaded_pkgs <- lapply(packages, library, character.only = TRUE)
+sourceCpp("euler_seq.cpp")
 
 initialize_directories <- function(base_path) {
   fs::dir_create(base_path, recurse = TRUE, mode = "0775")
@@ -50,7 +51,8 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
   cse_model <- lmer(
     rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
-    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
+    REML = FALSE
   )
 
   empirical_data$fitted_values <- fitted(cse_model)
@@ -69,7 +71,8 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
     rt_null ~ is_congruent + is_congruent:prev_congruent +
       (1 + is_congruent | participant_id),
     data = empirical_data,
-    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
+    REML = FALSE
   )
 
 
@@ -89,7 +92,8 @@ estimate_parameters <- function(empirical_data) {
   cse_model <- lmer(
     rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
-    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+    control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
+    REML = FALSE
   )
 
   rand_eff <- VarCorr(cse_model)[["participant_id"]]
@@ -131,10 +135,19 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
       Sigma = rand_eff_cov_acc
     )
 
+    # Asymptotic build towards even trial counts conditions 
+    # trials <- tibble(
+    #   participant_id = as.character(p),
+    #   trial = 1:n_trials,
+    #   is_congruent = sample(c(-1, 1), n_trials, replace = TRUE),
+    #   prev_congruent = lag(is_congruent, default = 1)
+    # ) %>% 
+
+    # Create trials tibble, ensuring equal trial numbers across conditions (n_trials / 4)
     trials <- tibble(
       participant_id = as.character(p),
       trial = 1:n_trials,
-      is_congruent = sample(c(-1, 1), n_trials, replace = TRUE),
+      is_congruent = generate_sequence(n_trials), # fast cpp implementation based on Hierholzer's eulerian circuit algorithm
       prev_congruent = lag(is_congruent, default = 1)
     ) %>%
       mutate(
@@ -300,7 +313,6 @@ update_registry <- function(effect, n, run, status, file_path = NA_character_, e
 }
 
 execute_simulations <- function(condition_parameters) {
-  # plan(multisession, workers = availableCores() - 2)
   # Configure SLURM cluster
   plan(list(
      tweak(
@@ -329,15 +341,15 @@ execute_simulations <- function(condition_parameters) {
     .l = pending_jobs,
     .f = function(effect, n, run, ...) {
       tryCatch({
-        message("Started simulation for effect: ", effect, ", participants: ", n, ", run: ", run)
+        # message("Started simulation for effect: ", effect, ", participants: ", n, ", run: ", run)
         sim_data <- simulate_cse_responses(n, trial_number, condition_parameters[[effect]])
         path <- save_results(sim_data, effect, n, run)
-        message("Saved results to:", path)
+        # message("Saved results to:", path)
         update_registry(effect, n, run, "completed", file_path = path)
-        message("Updated registry for effect: ", effect)
+        # message("Updated registry for effect: ", effect)
       }, error = function(e) {
         update_registry(effect, n, run, "failed", error_msg = e$message)
-        message("Error encountered: ", e$message)
+        # message("Error encountered: ", e$message)
       })
     },
     .options = furrr_options(
@@ -359,14 +371,19 @@ system.time({
     large_effect = estimate_parameters(large_effect)
   )
 
-  condition_parameters$no_effect <- estimate_null_interaction(
+  condition_parameters$small_no_effect <- estimate_null_interaction(
     small_effect,
     condition_parameters$small_effect$accuracy_model
   )
 
+  condition_parameters$large_no_effect <- estimate_null_interaction(
+    large_effect,
+    condition_parameters$large_effect$accuracy_model
+  )
+
   participant_numbers <- c(25, 50, 100, 200, 400)
   num_runs <- 1000
-  trial_number <- 400  # Fixed trial count
+  trial_number <- 400  # note: must be divisible by 4, see euler_seq.cpp
   registry_file <<- "job_registry.qs"
 
   job_registry <<- load_or_create_registry(registry_file)
