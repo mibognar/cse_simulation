@@ -42,8 +42,8 @@ plan(list(tweak(
   batchtools_slurm,
   template = "batchtools.slurm.tmpl",
   resources = list(
-    memory = 8000,
-    ncpus = 2,
+    memory = 4000,
+    ncpus = 1,
     partition = "hpc2019",
     work_dir = getwd()
   )
@@ -228,7 +228,7 @@ process_models <- function(f) {
         )
       ) %>%
         bind_cols(anova_terms) %>%
-        mutate(cohens_f2 = eta_sq / (1 - eta_sq), evidence = p.value < 0.05 & term < 0)
+        mutate(cohens_f2 = eta_sq / (1 - eta_sq), evidence = (`p.value` < 0.05))
 
     } else {
       result <- result %>%
@@ -244,4 +244,5 @@ process_models <- function(f) {
 
 results <- future_map_dfr(files, process_file)
 print(results, n = 100)
-write_csv(results, "combined_results.csv")
+write_csv(results, "combined_results_noisefree.csv")
+message("analysis done")

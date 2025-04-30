@@ -13,20 +13,22 @@
 # affiliations: ELTE Eotvos Lorand University
 # -------------------------------------------------
 
-# CSE Simulation Pipeline ----------------------------------------------------
-
+# CSE Simulation Pipeline -------------------------
 packages <- c(
   "tibble", "dplyr", "furrr", "future",
   "EZ2", "rtdists", "purrr", "tidyr",
   "readr", "lme4", "data.table", "future.apply",
-  "future.batchtools", "fs", "Rcpp", "glue"
+  "future.batchtools", "fs", "Rcpp", "glue", "congruentSeq"
 )
 
 loaded_pkgs <- lapply(packages, library, character.only = TRUE)
-Rcpp::sourceCpp("euler_seq.cpp")
 
 initialize_directories <- function(base_path) {
   fs::dir_create(base_path, recurse = TRUE, mode = "0775")
+  if (!dir.exists(base_path)) {
+    stop(sprintf("Could not create directory '%s'", base_path))
+  }
+
 }
 
 validate_parameters <- function(params) {
@@ -48,8 +50,10 @@ contrast_data <- function(empirical_data) {
 }
 
 estimate_null_interaction <- function(empirical_data, accuracy_model) {
+  data_name <- as.character(substitute(empirical_data))
+
   cse_model <- lmer(
-    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
+    rt ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
     control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
     REML = FALSE
@@ -68,8 +72,7 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
     empirical_data$residuals
 
   masked_model <- lmer(
-    rt_null ~ is_congruent + is_congruent:prev_congruent +
-      (1 + is_congruent | participant_id),
+    rt_null ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
     control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
     REML = FALSE
@@ -86,15 +89,16 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
     accuracy_model = accuracy_model
   )
 
-  qs::qsave(params, glue::glue("data/{as.character(substitute(empirical_data))}_null_params.qs"))
+  qs::qsave(params, glue::glue("data/{data_name}_null_params.qs"))
 
   return(params)
 }
 
 estimate_parameters <- function(empirical_data) {
+  data_name <- as.character(substitute(empirical_data))
 
   cse_model <- lmer(
-    rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
+    rt ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     data = empirical_data,
     control = lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
     REML = FALSE
@@ -104,7 +108,7 @@ estimate_parameters <- function(empirical_data) {
   rand_eff_cov <- as.matrix(rand_eff)
 
   accuracy_model <- glmer(
-    correct ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
+    correct ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     family = binomial,
     control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5)),
     data = empirical_data
@@ -117,8 +121,7 @@ estimate_parameters <- function(empirical_data) {
     accuracy_model = accuracy_model
   )
 
-
-  qs::qsave(params, glue::glue("data/{as.character(substitute(empirical_data))}_empirical_params.qs"))
+  qs::qsave(params, glue::glue("data/{data_name}_empirical_params.qs"))
 
   return(params)
 }
@@ -144,25 +147,21 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
       Sigma = rand_eff_cov_acc
     )
 
-    # Asymptotic build towards even trial counts conditions
-    # trials <- tibble(
-    #   participant_id = as.character(p),
-    #   trial = 1:n_trials,
-    #   is_congruent = sample(c(-1, 1), n_trials, replace = TRUE),
-    #   prev_congruent = lag(is_congruent, default = 1)
-    # ) %>%
-
     # Create trials tibble, ensuring equal trial numbers across conditions (n_trials / 4)
-    trials <- tibble::tibble(
+    trials <- tibble(
       participant_id = as.character(p),
       trial = 1:n_trials,
-      is_congruent = generate_sequence(n_trials), # fast cpp implementation based on Hierholzer's eulerian circuit algorithm
-      prev_congruent = dplyr::lag(is_congruent, default = 1)
+      is_congruent = tryCatch(
+        generate_sequence(n_trials), # comes from congruentSeq package
+        error = function(e) stop(sprintf("C++ sequence failed: %s", e$message))
+      ),
+      prev_congruent = lag(is_congruent, default = 1)
     ) %>%
-      dplyr::mutate(
+      mutate(
         fixed_effect = as.numeric(
           params$fixed["(Intercept)"] +
           params$fixed["is_congruent"] * is_congruent +
+          params$fixed["prev_congruent"] * prev_congruent +
           params$fixed["is_congruent:prev_congruent"] * is_congruent * prev_congruent
         ),
         random_effect = as.numeric(
@@ -173,22 +172,18 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
         rt = (fixed_effect + random_effect + rnorm(n_trials, 0, params$residual)) / 1000 # convert to second
       )
 
-    x_fixed <- model.matrix(~ is_congruent + is_congruent:prev_congruent, data = trials)
-
+    x_fixed <- model.matrix(~ is_congruent * prev_congruent, data = trials)
     x_random <- model.matrix(~ is_congruent, data = trials)
 
     fixed_logit <- x_fixed %*% fixef(params$accuracy_model)
-
     random_logit <- x_random %*% participant_re_acc
-
     logit <- fixed_logit + random_logit
-
     trials$correct <- rbinom(n_trials, 1, plogis(logit))
 
     return(trials)
   }
 
-  results <- furrr::future_map_dfr(
+  results <- future_map_dfr(
     1:n_participants,
     simulate_participant,
     .options = furrr_options(seed = TRUE)
@@ -197,15 +192,15 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
   epsilon <- .Machine$double.eps^0.5
 
   diffusion_data <- results %>%
-    dplyr::group_by(participant_id, is_congruent, prev_congruent) %>%
-    dplyr::summarise(
+    group_by(participant_id, is_congruent, prev_congruent) %>%
+    summarise(
       pc = mean(correct, na.rm = TRUE),
       vrt = var(rt[correct == 1], na.rm = TRUE),
       mrt = mean(rt[correct == 1], na.rm = TRUE),
       .groups = "drop"
     ) %>%
-    dplyr::mutate(
-      pc = dplyr::case_when(
+    mutate(
+      pc = case_when(
         pc >= (1 - epsilon) ~ 1 - 1 / (n_trials + 1),
         pc <= epsilon ~ 1 / (n_trials + 1),
         abs(pc - 0.5) < epsilon ~ 0.5 + epsilon,
@@ -214,8 +209,8 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
       vrt = ifelse(is.na(vrt), var(results$rt), vrt),
       mrt = ifelse(is.na(mrt), mean(results$rt), mrt)
     ) %>%
-    dplyr::mutate(
-      ez_params = furrr::future_pmap(
+    mutate(
+      ez_params = future_pmap(
         list(pc, vrt, mrt),
         function(p, v, m) {
           tryCatch({
@@ -233,41 +228,42 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
         .options = furrr_options(seed = TRUE)
       )
     ) %>%
-    tidyr::unnest_wider(ez_params)
-
+    unnest_wider(ez_params)
 
   final_trials <- results %>%
-    dplyr::left_join(diffusion_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
-    dplyr::filter(!is.na(v), !is.na(a), !is.na(Ter)) %>% # remove any problematic rows
-    dplyr::mutate(
-      diffusion = furrr::future_pmap(
+    left_join(diffusion_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+    filter(!is.na(v), !is.na(a), !is.na(Ter)) %>%
+    mutate(
+      diffusion = future_pmap(
         list(a, v, Ter),
-        ~ rtdists::rdiffusion(n = 1, a = ..1, v = ..2, t0 = ..3),
+        ~ rdiffusion(n = 1, a = ..1, v = ..2, t0 = ..3),
         .options = furrr_options(seed = TRUE)
       )
     ) %>%
-    dplyr::unnest_wider(diffusion, names_sep = "_") %>%
-    dplyr::select(participant_id, trial, is_congruent, prev_congruent, diffusion_rt, diffusion_response)
+    unnest_wider(diffusion, names_sep = "_") %>%
+    select(participant_id, trial, is_congruent, prev_congruent, diffusion_rt, diffusion_response)
 
 
-  uniform_proportion <- 0.05
-  uniform_range <- c(0, 3.09) # Coming from the empirical rt range
+  # Uncomment to add noise --------------------
+  # uniform_proportion <- 0.05
+  # uniform_range <- c(0, 3.09) # Coming from the empirical rt range
 
-  # Generate uniform trials to replace existing ones (5%)
-  uniform_trials <- sample(nrow(final_trials), size = round(nrow(final_trials) * uniform_proportion))
+  # # Generate uniform trials to replace existing ones (5%)
+  # uniform_trials <- sample(nrow(final_trials), size = round(nrow(final_trials) * uniform_proportion))
 
-  # Create uniform data for these trials
-  uniform_data <- tibble::tibble(
-    participant_id = final_trials$participant_id[uniform_trials],
-    trial = final_trials$trial[uniform_trials],
-    is_congruent = final_trials$is_congruent[uniform_trials],
-    prev_congruent = final_trials$prev_congruent[uniform_trials],
-    diffusion_rt = runif(length(uniform_trials), min = uniform_range[1], max = uniform_range[2]),
-    diffusion_response = final_trials$diffusion_response[uniform_trials]
-  )
+  # # Create uniform data for these trials
+  # uniform_data <- tibble(
+  #   participant_id = final_trials$participant_id[uniform_trials],
+  #   trial = final_trials$trial[uniform_trials],
+  #   is_congruent = final_trials$is_congruent[uniform_trials],
+  #   prev_congruent = final_trials$prev_congruent[uniform_trials],
+  #   diffusion_rt = runif(length(uniform_trials), min = uniform_range[1], max = uniform_range[2]),
+  #   diffusion_response = final_trials$diffusion_response[uniform_trials]
+  # )
 
-  # Replace the selected trials with uniform data
-  final_trials[uniform_trials, ] <- uniform_data
+  # # Replace the selected trials with uniform data
+  # final_trials[uniform_trials, ] <- uniform_data
+  #  ------------------------------------------
 
   return(final_trials)
 }
@@ -277,7 +273,11 @@ save_results <- function(data, effect_name, n_participants, run_number) {
   initialize_directories(output_dir)
 
   file_path <- file.path(output_dir, sprintf("%s_%04d.qs", n_participants, run_number))
-  qs::qsave(data, file_path, preset = "fast")
+  qs::qsave(data, file_path, preset = "balanced")
+
+  if (!file.exists(file_path)) {
+    stop(sprintf("Failed to save data : '%s'", file_path))
+  }
 
   return(file_path)
 }
@@ -288,7 +288,7 @@ initialize_registry <- function() {
     n = participant_numbers,
     run = 1:num_runs
   ) %>%
-    dplyr::mutate(
+    mutate(
       status = "pending",
       file_path = NA_character_,
       attempts = 0L,
@@ -301,7 +301,7 @@ load_or_create_registry <- function(registry_file) {
   if (file.exists(registry_file)) {
     qs::qread(registry_file)
   } else {
-    registry <<- initialize_registry()
+    registry <- initialize_registry()
     qs::qsave(registry, registry_file)
     registry
   }
@@ -309,13 +309,13 @@ load_or_create_registry <- function(registry_file) {
 
 
 update_registry <- function(effect, n, run, status, file_path = NA_character_, error_msg = NA_character_) {
-  job_registry <<- job_registry %>%
-    dplyr::mutate(
-      status = dplyr::if_else(effect == !!effect & n == !!n & run == !!run, status, status),
-      file_path = dplyr::if_else(effect == !!effect & n == !!n & run == !!run & !is.na(file_path), file_path, file_path),
-      last_error = dplyr::if_else(effect == !!effect & n == !!n & run == !!run & !is.na(error_msg), error_msg, last_error),
-      attempts = dplyr::if_else(effect == !!effect & n == !!n & run == !!run, attempts + 1L, attempts),
-      timestamp = dplyr::if_else(effect == !!effect & n == !!n & run == !!run, Sys.time(), timestamp)
+  job_registry <- job_registry %>%
+    mutate(
+      status = if_else(effect == !!effect & n == !!n & run == !!run, status, status),
+      file_path = if_else(effect == !!effect & n == !!n & run == !!run & !is.na(file_path), file_path, file_path),
+      last_error = if_else(effect == !!effect & n == !!n & run == !!run & !is.na(error_msg), error_msg, last_error),
+      attempts = if_else(effect == !!effect & n == !!n & run == !!run, attempts + 1L, attempts),
+      timestamp = if_else(effect == !!effect & n == !!n & run == !!run, Sys.time(), timestamp)
     )
 
   qs::qsave(job_registry, registry_file)
@@ -329,44 +329,46 @@ execute_simulations <- function(condition_parameters) {
        template = "batchtools.slurm.tmpl",
        resources = list(
          memory = 6000,
-         ncpus = 10,
+         ncpus = 2,
          partition = "hpc2019",
          work_dir = getwd()
        )
      ),
      multisession
   ))
-
+  
   pending_jobs <- job_registry %>%
-    dplyr::filter(status == "pending") %>%
-    dplyr::select(effect, n, run)
+    filter(status == "pending") %>%
+    select(effect, n, run)
 
   if (nrow(pending_jobs) == 0) {
     message("No pending jobs found.")
     return(NULL)
   }
 
-  furrr::future_pwalk(
+  future_pwalk(
     .l = pending_jobs,
     .f = function(effect, n, run, ...) {
       tryCatch({
-        # message("Started simulation for effect: ", effect, ", participants: ", n, ", run: ", run)
+        message("Started simulation for effect: ", effect, ", participants: ", n, ", run: ", run)
         sim_data <- simulate_cse_responses(n, trial_number, condition_parameters[[effect]])
         path <- save_results(sim_data, effect, n, run)
-        # message("Saved results to:", path)
+        message("Saved results to:", path)
         update_registry(effect, n, run, "completed", file_path = path)
-        # message("Updated registry for effect: ", effect)
+        message("Updated registry for effect: ", effect)
       }, error = function(e) {
         update_registry(effect, n, run, "failed", error_msg = e$message)
-        # message("Error encountered: ", e$message)
+        message("Error encountered: ", e$message)
       })
     },
     .options = furrr_options(
-      seed = TRUE
+      seed = TRUE,
+      scheduling = 50
     )
   )
 }
 
+# Execution ------------------------------
 
 system.time({
   small_effect <- readr::read_csv("./data/empirical/flanker_processed.csv") |>
@@ -392,10 +394,10 @@ system.time({
 
   participant_numbers <- c(25, 50, 100, 200, 400)
   num_runs <- 1000
-  trial_number <- 400  # note: must be divisible by 4, see euler_seq.cpp
-  registry_file <<- "job_registry.qs"
+  trial_number <- 400
+  registry_file <- "job_registry.qs"
 
-  job_registry <<- load_or_create_registry(registry_file)
+  job_registry <- load_or_create_registry(registry_file)
 
   execute_simulations(condition_parameters)
 

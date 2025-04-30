@@ -99,7 +99,7 @@ ensure_complete_data <- function(data, participant_col, condition_cols) {
       dplyr::mutate(dplyr::across(tidyselect::all_of(condition_cols), as.numeric)) # Switching back to numeric
 
   } else {
-    message("Data is already complete dplyr::across all conditions.")
+    message("Data is already complete across all conditions.")
     data_complete <- data %>%
       dplyr::mutate(dplyr::across(tidyselect::all_of(condition_cols), as.numeric)) # Switching back to numeric
   }
@@ -174,11 +174,11 @@ update_checkpoint <- function(checkpoint, job_id, status) {
   invisible(checkpoint)
 }
 
-# Model fitting functions -----------------------------------------------------------
+# Model fitting functions ------------------------------------
 
 fit_full_glmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
+    diffusion_rt ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     test_data,
     inverse.gaussian(link = "log")
   )
@@ -186,7 +186,7 @@ fit_full_glmer <- function(test_data) {
 
 fit_simple_glmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 | participant_id),
+    diffusion_rt ~ is_congruent * prev_congruent + (1 | participant_id),
     test_data,
     inverse.gaussian(link = "log")
   )
@@ -210,14 +210,14 @@ fit_simple_null_glmer <- function(test_data) {
 
 fit_full_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 + is_congruent | participant_id),
+    diffusion_rt ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     test_data
   )
 }
 
 fit_simple_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + is_congruent:prev_congruent + (1 | participant_id),
+    diffusion_rt ~ is_congruent * prev_congruent + (1 | participant_id),
     test_data
   )
 }
@@ -225,9 +225,9 @@ fit_simple_lmer <- function(test_data) {
 fit_anova <- function(test_data) {
   anova_model <- ezANOVA(
     data = test_data,
-    dv = .({{ diffusion_rt }}),
-    within = .({{ is_congruent }} , {{ prev_congruent }}),
-    wid = .({{ participant_id }}),
+    dv = .(diffusion_rt),
+    within = .(is_congruent, prev_congruent),
+    wid = .(participant_id),
     detailed = TRUE
   )
 
