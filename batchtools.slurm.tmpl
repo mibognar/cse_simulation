@@ -8,13 +8,6 @@
 #SBATCH --mem-per-cpu=<%= resources$memory %>
 #SBATCH --partition=<%= resources$partition %>
 
-## Initialize work environment like
-## - loading modules
-## - switching to project dir
-## - setting environment variables
-
-module load slurm
-
 
 # Sourcing the .bashrc file
 source /users/usumusu/.bashrc
