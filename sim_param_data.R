@@ -90,6 +90,7 @@ estimate_null_interaction <- function(empirical_data, accuracy_model) {
   )
 
   qs::qsave(params, glue::glue("data/{data_name}_null_params.qs"))
+  
 
   return(params)
 }
@@ -122,6 +123,7 @@ estimate_parameters <- function(empirical_data) {
   )
 
   qs::qsave(params, glue::glue("data/{data_name}_empirical_params.qs"))
+  print(summary(cse_model))
 
   return(params)
 }
@@ -245,24 +247,24 @@ simulate_cse_responses <- function(n_participants, n_trials, params) {
 
 
   # Uncomment to add noise --------------------
-  # uniform_proportion <- 0.05
-  # uniform_range <- c(0, 3.09) # Coming from the empirical rt range
+  uniform_proportion <- 0.05
+  uniform_range <- c(0, 3.09) # Coming from the empirical rt range
 
-  # # Generate uniform trials to replace existing ones (5%)
-  # uniform_trials <- sample(nrow(final_trials), size = round(nrow(final_trials) * uniform_proportion))
+  # Generate uniform trials to replace existing ones (5%)
+  uniform_trials <- sample(nrow(final_trials), size = round(nrow(final_trials) * uniform_proportion))
 
-  # # Create uniform data for these trials
-  # uniform_data <- tibble(
-  #   participant_id = final_trials$participant_id[uniform_trials],
-  #   trial = final_trials$trial[uniform_trials],
-  #   is_congruent = final_trials$is_congruent[uniform_trials],
-  #   prev_congruent = final_trials$prev_congruent[uniform_trials],
-  #   diffusion_rt = runif(length(uniform_trials), min = uniform_range[1], max = uniform_range[2]),
-  #   diffusion_response = final_trials$diffusion_response[uniform_trials]
-  # )
+  # Create uniform data for these trials
+  uniform_data <- tibble(
+    participant_id = final_trials$participant_id[uniform_trials],
+    trial = final_trials$trial[uniform_trials],
+    is_congruent = final_trials$is_congruent[uniform_trials],
+    prev_congruent = final_trials$prev_congruent[uniform_trials],
+    diffusion_rt = runif(length(uniform_trials), min = uniform_range[1], max = uniform_range[2]),
+    diffusion_response = final_trials$diffusion_response[uniform_trials]
+  )
 
-  # # Replace the selected trials with uniform data
-  # final_trials[uniform_trials, ] <- uniform_data
+  # Replace the selected trials with uniform data
+  final_trials[uniform_trials, ] <- uniform_data
   #  ------------------------------------------
 
   return(final_trials)
@@ -391,6 +393,8 @@ system.time({
     large_effect,
     condition_parameters$large_effect$accuracy_model
   )
+
+  stop()
 
   participant_numbers <- c(25, 50, 100, 200, 400)
   num_runs <- 1000
