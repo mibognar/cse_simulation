@@ -110,9 +110,9 @@ ensure_complete_data <- function(data, participant_col, condition_cols) {
 
 run_model <- function(formula, data, family = NULL) {
   ctrl <- if (is.null(family)) {
-    lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
+    lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
   } else {
-    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
   }
 
   result <- tryCatch({
@@ -128,18 +128,6 @@ run_model <- function(formula, data, family = NULL) {
 
   return(result)
 }
-
-# calculate_cse <- function(data) {
-#   data %>%
-#     dplyr::group_by(prev_congruent, is_congruent) %>%
-#     dplyr::summarise(mean_rt = mean(rt, na.rm = TRUE)) %>%
-#     tidyr::pivot_wider(
-#       names_from = c(prev_congruent, is_congruent),
-#       values_from = mean_rt
-#     ) %>%
-#     dplyr::mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
-#     dplyr::pull(cse)
-# }
 
 # Checkpoint System -----------------------------------------------------------
 initialize_checkpoint <- function() {
@@ -176,35 +164,31 @@ update_checkpoint <- function(checkpoint, job_id, status) {
 
 # Model fitting functions ------------------------------------
 
-fit_full_glmer <- function(test_data) {
+fit_full_log_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
-    test_data,
-    inverse.gaussian(link = "log")
+    log(diffusion_rt) ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
+    test_data
   )
 }
 
-fit_simple_glmer <- function(test_data) {
+fit_simple_log_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent * prev_congruent + (1 | participant_id),
-    test_data,
-    inverse.gaussian(link = "log")
+    log(diffusion_rt) ~ is_congruent * prev_congruent + (1 | participant_id),
+    test_data
   )
 }
 
-fit_full_null_glmer <- function(test_data) {
+fit_full_null_log_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + (1 + is_congruent | participant_id),
-    test_data,
-    inverse.gaussian(link = "log")
+    log(diffusion_rt) ~ is_congruent + (1 + is_congruent | participant_id),
+    test_data
   )
 }
 
-fit_simple_null_glmer <- function(test_data) {
+fit_simple_null_log_lmer <- function(test_data) {
   run_model(
-    diffusion_rt ~ is_congruent + (1 | participant_id),
-    test_data,
-    inverse.gaussian(link = "log")
+    log(diffusion_rt) ~ is_congruent + (1 | participant_id),
+    test_data
   )
 }
 
@@ -302,17 +286,18 @@ process_parameter_set <- function(param_set, checkpoint) {
     data = test_data,
     participant_col = "participant_id",
     condition_cols = c("is_congruent", "prev_congruent")
-  )
+  ) %>% mutate(
+      diffusion_rt = diffusion_rt * 1000 # convert back to ms
+    )
 
 
   rm(raw_data, filtered_data)
-  gc()
 
   model_functions <- list(
-    simple_glmer = fit_simple_glmer,
-    full_glmer = fit_full_glmer,
-    simple_null_glmer = fit_simple_null_glmer,
-    full_null_glmer = fit_full_null_glmer,
+    simple_log_lmer = fit_simple_log_lmer,
+    full_log_lmer = fit_full_log_lmer,
+    simple_null_log_lmer = fit_simple_null_log_lmer,
+    full_null_log_lmer = fit_full_null_log_lmer,
     simple_lmer = fit_simple_lmer,
     full_lmer = fit_full_lmer,
     simple_null_lmer = fit_simple_null_lmer,
@@ -348,7 +333,6 @@ process_parameter_set <- function(param_set, checkpoint) {
   update_checkpoint(checkpoint, param_set$job_id, "completed")
 
   rm(results)
-  gc()
 
 }
 

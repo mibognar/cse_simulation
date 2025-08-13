@@ -33,7 +33,6 @@ process_file <- function(file_path) {
 
   result <- process_models(f)
   rm(f)
-  gc()
 
   return(result)
 }
@@ -116,8 +115,8 @@ process_models <- function(f) {
     model_object <- current$model
 
     null_model_id <- case_when(
-      model_name == "full_glmer" ~ "full_null_glmer",
-      model_name == "simple_glmer" ~ "simple_null_glmer",
+      model_name == "full_log_lmer" ~ "full_null_log_lmer",
+      model_name == "simple_log_lmer" ~ "simple_null_log_lmer",
       model_name == "full_lmer" ~ "full_null_lmer",
       model_name == "simple_lmer" ~ "simple_null_lmer",
       TRUE ~ NA
@@ -193,8 +192,8 @@ process_models <- function(f) {
 
         } else {
           cohens_f2 <- NA_real_
-          evidence <- FALSE
-          soft_evidence <- FALSE
+          evidence <- NA
+          soft_evidence <- NA
         }
 
 
@@ -210,7 +209,7 @@ process_models <- function(f) {
 
       anova_terms <- anova_table %>%
         filter(Effect == "is_congruent:prev_congruent") %>%
-        rename(term = Effect, p.value = p, statistic = `F`, eta_sq = ges)
+        rename(term = Effect, `p.value` = p, statistic = `F`, eta_sq = ges)
 
       result <- result %>% bind_cols(
         tibble(
@@ -228,7 +227,7 @@ process_models <- function(f) {
         )
       ) %>%
         bind_cols(anova_terms) %>%
-        mutate(cohens_f2 = eta_sq / (1 - eta_sq), evidence = (`p.value` < 0.05))
+        mutate(cohens_f2 = eta_sq / (1 - eta_sq), evidence = `p.value` < 0.05)
 
     } else {
       result <- result %>%
@@ -244,5 +243,5 @@ process_models <- function(f) {
 
 results <- future_map_dfr(files, process_file)
 print(results, n = 100)
-write_csv(results, "combined_results_noisefree.csv")
+write_csv(results, "combined_results.csv")
 message("analysis done")
