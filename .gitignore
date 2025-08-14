@@ -4,3 +4,8 @@
 .Ruserdata
 *.csv
 *.tsv
+data/
+.future/
+*.log
+*.out
+*.qs

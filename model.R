@@ -4,11 +4,11 @@
 #SBATCH --output=out_model.log
 #SBATCH --error=error_model.log
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=40G
 #SBATCH --partition=hpc2019
 
-# main.R
+# model.R
 # authors: Miklos Bognar & Marton A. Varga
 # affiliations: ELTE Eotvos Lorand University
 # -------------------------------------------------
@@ -16,93 +16,122 @@
 suppressPackageStartupMessages({
   library(tidyverse)
   library(lme4)
+  library(lmerTest)
   library(EZ2)
+  library(ez)
   library(future)
   library(future.batchtools)
   library(furrr)
   library(qs)
-  library(validate)
-  library(futile.logger)
 })
 
-Sys.setenv(TZ = "UTC")
-flog.appender(appender.file("model_internal.log"))
 
 # Configure SLURM cluster
 
-
 plan(list(
-  tweak(batchtools_slurm,
-        template = "batchtools.slurm.tmpl",
-        resources = list(
-          memory = 16000,
-          ncpus = 16,
-          partition = "hpc2019",
-          work_dir = getwd(),
-          chunks.as.array.jobs = TRUE
-        )),
-  tweak(multisession, workers = 8)
+  tweak(
+    batchtools_slurm,
+    template = "batchtools.slurm.tmpl",
+    resources = list(
+      memory = 5000,
+      ncpus = 10,
+      partition = "hpc2019",
+      work_dir = getwd()
+    )
+  ),
+  multisession
 ))
 
-# number of cores
-# num_cores <- parallel::detectCores() - 1
-# plan(multisession, workers = num_cores)
 
-# Helper functions --------------------------------------------------------
 load_precomputed_data <- function(param_set) {
-  # Input validation
-  check <- check_that(param_set,
-    is.character(param_set$effect_size),
-    is.numeric(param_set$sd_filter),
-    is.numeric(param_set$participants),
-    is.character(param_set$id)
-  )
-  if (any(failing(check))) stop("Invalid parameter set structure")
-
   file_path <- file.path("data/simulated", param_set$effect_size, paste0(param_set$id, ".qs"))
-
-
   qs::qread(file_path, strict = TRUE)
 }
 
+parse_filter_params <- function(filter_type) {
+  if (filter_type == "no_filter") {
+    return(list(type = "no_filter"))
+  } else if (startsWith(filter_type, "sd_")) {
+    threshold <- as.numeric(sub("sd_", "", filter_type))
+    return(list(type = "sd", threshold = threshold))
+  } else if (startsWith(filter_type, "mad_")) {
+    threshold <- as.numeric(sub("mad_", "", filter_type))
+    return(list(type = "mad", threshold = threshold))
+  } else if (startsWith(filter_type, "time_")) {
+    upper_limit <- as.numeric(sub("time_", "", filter_type))
+    return(list(type = "time", lower = 0.2, upper = upper_limit))
+  } else {
+    stop("Unknown filter type: ", filter_type)
+  }
+}
+
+ensure_complete_data <- function(data, participant_col, condition_cols) {
+  # Ensure columns are factors
+  data <- data %>%
+    dplyr::mutate(dplyr::across(tidyselect::all_of(c(participant_col, condition_cols)), as.factor))
+
+  # Count observations per participant per condition combination
+  condition_counts <- data %>%
+    dplyr::group_by(dplyr::across(tidyselect::all_of(c(participant_col, condition_cols)))) %>%
+    dplyr::summarise(n = dplyr::n(), .groups = "drop")
+
+  # Generate all possible combinations of participants and conditions
+  all_combinations <- expand.grid(
+    lapply(data[c(participant_col, condition_cols)], levels)
+  ) %>%
+    tibble::as_tibble()
+
+  colnames(all_combinations) <- c(participant_col, condition_cols)
+
+  # Identify missing combinations
+  missing_combinations <- dplyr::anti_join(
+    all_combinations, condition_counts,
+    by = c(participant_col, condition_cols)
+  )
+
+  if (nrow(missing_combinations) > 0) {
+    incomplete_participants <- unique(missing_combinations[[participant_col]])
+    message("Removing incomplete participants: ", paste(incomplete_participants, collapse = ", "))
+
+    # Remove incomplete participants
+    data_complete <- data %>%
+      dplyr::filter(!(!!rlang::sym(participant_col) %in% incomplete_participants)) %>%
+      dplyr::mutate(dplyr::across(tidyselect::all_of(condition_cols), as.numeric)) # Switching back to numeric
+
+  } else {
+    message("Data is already complete across all conditions.")
+    data_complete <- data %>%
+      dplyr::mutate(dplyr::across(tidyselect::all_of(condition_cols), as.numeric)) # Switching back to numeric
+  }
+
+  return(data_complete)
+}
+
+
 run_model <- function(formula, data, family = NULL) {
   ctrl <- if (is.null(family)) {
-    lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
+    lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
   } else {
-    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
+    glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e8))
   }
 
   result <- tryCatch({
     model <- if (is.null(family)) {
-      lmer(formula, data, control = ctrl)
+      lmer(formula, data, control = ctrl, REML = FALSE)
     } else {
       glmer(formula, data, family = family, control = ctrl)
     }
 
-    model@frame <- model@frame[0, ]
-    model@resp <- new("glmResp", ...)
-
     list(model = model, error = FALSE)
+
   }, error = function(e) list(model = NULL, error = TRUE, message = conditionMessage(e)))
 
   return(result)
 }
 
-calculate_cse <- function(data) {
-  data %>%
-    group_by(prev_congruent, is_congruent) %>%
-    summarize(mean_rt = mean(rt, na.rm = TRUE)) %>%
-    pivot_wider(
-      names_from = c(prev_congruent, is_congruent),
-      values_from = mean_rt
-    ) %>%
-    mutate(cse = (`1_0` - `1_1`) - (`0_0` - `0_1`)) %>%
-    pull(cse)
-}
-
 # Checkpoint System -----------------------------------------------------------
 initialize_checkpoint <- function() {
-  checkpoint_file <- "simulation_checkpoint.qs"
+  checkpoint_file <- "model_checkpoint.qs"
   if (file.exists(checkpoint_file)) {
     checkpoint <- qs::qread(checkpoint_file)
   } else {
@@ -129,168 +158,235 @@ update_checkpoint <- function(checkpoint, job_id, status) {
     )
   }
 
-  qs::qsave(checkpoint, "simulation_checkpoint.qs")
+  qs::qsave(checkpoint, "model_checkpoint.qs")
   invisible(checkpoint)
 }
 
-# Model fitting functions -----------------------------------------------------------
+# Model fitting functions ------------------------------------
 
-fit_glmer <- function(test_data) {
+fit_full_log_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent*prev_congruent + (1 + is_congruent*prev_congruent | participant_id),
-    test_data,
-    inverse.gaussian(link = "log")
+    log(diffusion_rt) ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
+    test_data
+  )
+}
+
+fit_simple_log_lmer <- function(test_data) {
+  run_model(
+    log(diffusion_rt) ~ is_congruent * prev_congruent + (1 | participant_id),
+    test_data
+  )
+}
+
+fit_full_null_log_lmer <- function(test_data) {
+  run_model(
+    log(diffusion_rt) ~ is_congruent + (1 + is_congruent | participant_id),
+    test_data
+  )
+}
+
+fit_simple_null_log_lmer <- function(test_data) {
+  run_model(
+    log(diffusion_rt) ~ is_congruent + (1 | participant_id),
+    test_data
   )
 }
 
 fit_full_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent*prev_congruent + (1 + is_congruent*prev_congruent | participant_id),
+    diffusion_rt ~ is_congruent * prev_congruent + (1 + is_congruent | participant_id),
     test_data
   )
 }
 
 fit_simple_lmer <- function(test_data) {
   run_model(
-    rt ~ is_congruent*prev_congruent + (1 | participant_id),
+    diffusion_rt ~ is_congruent * prev_congruent + (1 | participant_id),
     test_data
   )
 }
 
 fit_anova <- function(test_data) {
-  ezANOVA(
+  anova_model <- ezANOVA(
     data = test_data,
-    dv = participant_mean_rt,
-    wid = participant_id,
-    within = .(is_congruent, prev_congruent)
+    dv = .(diffusion_rt),
+    within = .(is_congruent, prev_congruent),
+    wid = .(participant_id),
+    detailed = TRUE
+  )
+
+  list(model = anova_model, error = FALSE)
+}
+
+fit_full_null_lmer <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + (1 + is_congruent | participant_id),
+    test_data
+  )
+}
+
+fit_simple_null_lmer <- function(test_data) {
+  run_model(
+    diffusion_rt ~ is_congruent + (1 | participant_id),
+    test_data
   )
 }
 
 
 # Simulation workflow -----------------------------------------------------
 process_parameter_set <- function(param_set, checkpoint) {
-  flog.info("Starting job processing for parameter set %s", param_set$id)
-  options(scipen = 999)
-  options(dplyr.summarise.inform = FALSE)
 
-  if (param_set$id %in% checkpoint$completed_jobs) {
+  if (param_set$job_id %in% checkpoint$completed_jobs) {
     return(invisible())
   }
 
-  tryCatch({
-    raw_data <- load_precomputed_data(param_set)
-    flog.debug("Raw data loaded for %s", param_set$id)
+  raw_data <- load_precomputed_data(param_set)
+  filter_params <- parse_filter_params(param_set$filter_type)
 
-    filtered_data <- raw_data %>%
-      dtplyr::lazy_dt() %>%
-      mutate(
-        correct = as.integer(response == "upper")
-      ) %>%
-      group_by(participant_id, is_congruent, prev_congruent) %>%
-      summarise(
-        N = n(),
-        participant_mean_rt = mean(rt),
-        participant_var_rt = var(rt),
-        participant_sd_rt = sd(rt),
-        participant_correct_percent = mean(correct),
-        .groups = "drop"
-      ) %>%
-      as_tibble()
 
-    test_data <- raw_data %>%
-      inner_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
-      mutate(
-        rt_zscore = (rt - participant_mean_rt) / participant_sd_rt,
-        across(c(is_congruent, prev_congruent, participant_id), as.factor)
-      ) %>%
-      filter(response == "upper", abs(rt_zscore) < param_set$sd_filter)
+  filtered_data <- raw_data %>%
+    dplyr::mutate(
+      correct = as.integer(diffusion_response == "upper")
+    ) %>%
+    dplyr::group_by(participant_id, is_congruent, prev_congruent) %>%
+    dplyr::summarise(
+      N = dplyr::n(),
+      participant_mean_rt = mean(diffusion_rt),
+      participant_var_rt = var(diffusion_rt),
+      participant_sd_rt = sd(diffusion_rt),
+      participant_median_rt = median(diffusion_rt),
+      participant_mad_rt = mad(diffusion_rt),
+      .groups = "drop"
+    ) %>%
+    tibble::as_tibble()
 
-    # Fit models
-    model_results <- future_map(
-      list(
-        glmer = fit_glmer,
-        full_lmer = fit_full_lmer,
-        simple_lmer = fit_simple_lmer,
-        anova = fit_anova
-      ),
-      ~ future(.x(test_data)),
-      .options = furrr_options(seed = TRUE)
+  test_data <- raw_data %>%
+    dplyr::left_join(filtered_data, by = c("participant_id", "is_congruent", "prev_congruent")) %>%
+    dplyr::mutate(
+      rt_zscore = (diffusion_rt - participant_mean_rt) / participant_sd_rt
+    ) %>%
+    dplyr::filter(diffusion_response == "upper", trial != 1) # excluding incorrect and first trials
+
+  if (filter_params$type == "sd") {
+    test_data <- test_data %>% dplyr::filter(abs(rt_zscore) < filter_params$threshold)
+  } else if (filter_params$type == "mad") {
+    test_data <- test_data %>%
+      dplyr::mutate(
+        lower_bound = participant_median_rt - filter_params$threshold * participant_mad_rt,
+        upper_bound = participant_median_rt + filter_params$threshold * participant_mad_rt
+      ) %>%
+      dplyr::filter(diffusion_rt >= lower_bound & diffusion_rt <= upper_bound)
+  } else if (filter_params$type == "time") {
+    test_data <- test_data %>% dplyr::filter(diffusion_rt >= filter_params$lower & diffusion_rt <= filter_params$upper)
+  } else if (filter_params$type == "no_filter") {
+    # Do nothing explicitly
+  }
+
+  test_data <- ensure_complete_data(
+    data = test_data,
+    participant_col = "participant_id",
+    condition_cols = c("is_congruent", "prev_congruent")
+  ) %>% mutate(
+      diffusion_rt = diffusion_rt * 1000 # convert back to ms
     )
 
-    results <- list(
-      params = param_set,
-      models = model_results
-    )
 
-    flog.info("Models fitted for %s", param_set$id)
+  rm(raw_data, filtered_data)
 
-    # Save results incrementally
-    result_file <- tempfile(pattern = "results_", tmpdir = getwd(), fileext = ".qs")
-    qs::qsave(
-      list(params = param_set, models = results),
-      result_file,
-      preset = "fast"
-    )
+  model_functions <- list(
+    simple_log_lmer = fit_simple_log_lmer,
+    full_log_lmer = fit_full_log_lmer,
+    simple_null_log_lmer = fit_simple_null_log_lmer,
+    full_null_log_lmer = fit_full_null_log_lmer,
+    simple_lmer = fit_simple_lmer,
+    full_lmer = fit_full_lmer,
+    simple_null_lmer = fit_simple_null_lmer,
+    full_null_lmer = fit_full_null_lmer,
+    anova = fit_anova
+  )
 
-    # Atomic move to final location
-    final_path <- file.path("data/results", param_set$effect_size, paste0(param_set$id, ".qs"))
-    file.rename(result_file, final_path)
+  # Fit models
+  model_results <- furrr::future_map(
+    model_functions,
+    ~ .x(test_data),
+    .options = furrr_options(seed = TRUE)
+  )
 
-    # Update checkpoint
-    update_checkpoint(checkpoint, param_set$id, "completed")
+  results <- list(
+    params = param_set,
+    models = model_results
+  )
 
-  }, error = function(e) {
-    update_checkpoint(checkpoint, param_set$id, "failed")
-    stop("Error processing ", param_set$id, ": ", e$message)
-  })
+
+  output_dir <- file.path("data/results", param_set$effect_size, param_set$filter_type)
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+  file_path <- file.path(output_dir, paste0(param_set$id, ".qs"))
+
+  qs::qsave(
+    results,
+    file_path,
+    preset = "fast"
+  )
+
+  # Update checkpoint
+  update_checkpoint(checkpoint, param_set$job_id, "completed")
+
+  rm(results)
+
 }
 
 # Parameter setup ---------------------------------------------------------
 parameter_grid <- expand.grid(
-  effect_size = c("no_effect", "small_effect", "large_effect"),
-  sd_filter = c(2.5, 3.0, Inf),
+  effect_size = c("small_no_effect", "large_no_effect", "small_effect", "large_effect"),
+  filter_type = c(
+    "no_filter",
+    "sd_2.0", "sd_2.5", "sd_3.0",
+    "mad_2.0", "mad_2.5", "mad_3.0",
+    "time_1", "time_1.25", "time_1.5"
+  ),
   participants = c(25, 50, 100, 200, 400),
   df_id = 1:1000,
   stringsAsFactors = FALSE
 ) %>%
-  mutate(
-    id = paste0(participants, "_", df_id)
+  tibble::as_tibble() %>%
+  dplyr::mutate(
+    id = sprintf("%s_%04d", participants, df_id),
+    job_id = sprintf("%s_%s_%04d", participants, filter_type, df_id)
   )
 
-
-# Submit jobs -------------------------------------------------------------
 run_jobs <- function() {
-
   checkpoint <- initialize_checkpoint()
 
   # Filter unprocessed jobs
   pending_jobs <- parameter_grid %>%
-    filter(!id %in% checkpoint$completed_jobs)
+    dplyr::filter(!job_id %in% checkpoint$completed_jobs)
 
-  # Process in optimized chunks
-  results <- pending_jobs %>%
-    future_map(
-      ~ tryCatch(
-        process_parameter_set(.x, checkpoint),
-        error = function(e) {
-          message("Critical error: ", e$message)
-          flog.error("Error processing %s: %s", pending_jobs$id, e$message)
-        }
-      ),
-      .options = furrr_options(
-        seed = TRUE,
-        scheduling = 8,  # Process 8 jobs per worker
-        chunk_size = 100, # Optimized for SLURM array jobs
-        globals = c("checkpoint", "pending_jobs", "process_parameter_set") # Reduce memory overhead
-      )
+  # Check if there are any pending jobs
+  if (nrow(pending_jobs) == 0) {
+    message("No pending jobs to process.")
+    return()
+  }
+
+  # Process in optimized chunks using future_pmap
+  furrr::future_map(
+    .x = seq_len(nrow(pending_jobs)),
+    .f = function(i) {
+      param_row <- pending_jobs[i, ]
+      process_parameter_set(param_row, checkpoint)
+      qs::qsave(checkpoint, "model_checkpoint.qs")
+
+      rm(param_row)
+      gc()
+    },
+    .options = furrr_options(
+      seed = TRUE,
     )
+  )
 
-  # Final checkpoint update
-  qs::qsave(checkpoint, "simulation_checkpoint.qs")
 }
 
 # Main Execution --------------------------------------------------------------
-if (!interactive()) {
-  run_jobs()
-  message("Simulation completed successfully!")
-}
+run_jobs()
+Sys.sleep(5)
+message("Modeling completed successfully!")
